@@ -19,6 +19,11 @@ if (-not (Test-Path '.venv\Scripts\python.exe')) {
     auto_mosaic\app.py
 
 Copy-Item -LiteralPath 'README.md' -Destination 'dist\AutoMosaic\README.md' -Force
+Copy-Item -LiteralPath 'LICENSE' -Destination 'dist\AutoMosaic\LICENSE' -Force
+Copy-Item -LiteralPath 'NOTICE' -Destination 'dist\AutoMosaic\NOTICE' -Force
 Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination 'dist\AutoMosaic\THIRD_PARTY_NOTICES.md' -Force
+Copy-Item -LiteralPath 'MODEL_LICENSES.md' -Destination 'dist\AutoMosaic\MODEL_LICENSES.md' -Force
+Copy-Item -LiteralPath 'DISTRIBUTION.md' -Destination 'dist\AutoMosaic\DISTRIBUTION.md' -Force
+Copy-Item -LiteralPath 'LICENSES' -Destination 'dist\AutoMosaic\LICENSES' -Recurse -Force
 
 Write-Host "Build complete: $ProjectRoot\dist\AutoMosaic\AutoMosaic.exe"

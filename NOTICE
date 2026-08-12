@@ -1,0 +1,15 @@
+Auto Mosaic
+Copyright (C) 2026 Hiyoko Typing
+
+Auto Mosaic is free software licensed under the GNU Affero General Public
+License version 3 only (AGPL-3.0-only). It is distributed WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See LICENSE for the complete terms.
+
+This product includes third-party software and machine-learning model files.
+Their copyright notices and license terms are listed in
+THIRD_PARTY_NOTICES.md, MODEL_LICENSES.md, and the LICENSES directory.
+
+The source code is published in the repository containing this NOTICE. Anyone
+who redistributes a binary must also identify and provide access to the exact
+public source revision used for that build under AGPL-3.0-only.

@@ -60,6 +60,7 @@ python -m venv .venv
 5. 出力先を選び、「表示中を処理」または「全て処理」で保存します。
 
 初回の画像表示時はモデルの読み込みに少し時間がかかることがあります。
+<img width="1524" height="1022" alt="Adobe Express 2026-08-15 12 57 30" src="https://github.com/user-attachments/assets/8cd4c9fc-3719-4803-a792-6ec421eff97f" />
 
 
 ## 注意

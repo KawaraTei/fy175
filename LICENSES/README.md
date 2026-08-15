@@ -20,7 +20,7 @@ builds. Do not remove them from a binary distribution.
 | `SAMExporter-MIT.txt` | SAM Exporter reference implementation |
 | `DeepGHS-Model-MIT-NOTICE.md` | DeepGHS model-card MIT declaration and attribution note |
 
-`LICENSE` at the repository root contains the AGPL-3.0 license for Auto Mosaic.
+`LICENSE` at the repository root contains the AGPL-3.0 license for FY175AutoMosaic.
 The additional NudeNet copy is retained so a binary recipient can associate the
 model with its upstream license independently.
 

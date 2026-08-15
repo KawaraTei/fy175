@@ -37,6 +37,7 @@ from auto_mosaic.model_catalog import required_model_paths
 from auto_mosaic.pipeline import MosaicPipeline
 
 
+APP_NAME = "FY175AutoMosaic"
 MAX_IMAGES = 100
 
 
@@ -55,7 +56,7 @@ def resource_root() -> Path:
 class AutoMosaicWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Auto Mosaic - 個人用プロトタイプ")
+        self.setWindowTitle(APP_NAME)
         self.resize(1260, 790)
         self.setMinimumSize(980, 650)
         self.setAcceptDrops(True)
@@ -184,6 +185,7 @@ class AutoMosaicWindow(QMainWindow):
         right_layout.addWidget(self._section_label("画像の種類"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["実写", "イラスト"])
+        self.mode_combo.setCurrentText("イラスト")
         right_layout.addWidget(self.mode_combo)
         right_layout.addSpacing(8)
 
@@ -453,7 +455,7 @@ class AutoMosaicWindow(QMainWindow):
         path = self._selected_path()
         if path is None:
             if report_errors:
-                QMessageBox.information(self, "Auto Mosaic", "画像を選択してください。")
+                QMessageBox.information(self, APP_NAME, "画像を選択してください。")
             return
         try:
             settings = self._settings()
@@ -485,7 +487,7 @@ class AutoMosaicWindow(QMainWindow):
     def _process_current(self) -> None:
         path = self._selected_path()
         if path is None:
-            QMessageBox.information(self, "Auto Mosaic", "画像を選択してください。")
+            QMessageBox.information(self, APP_NAME, "画像を選択してください。")
             return
         try:
             settings = self._settings()
@@ -509,7 +511,7 @@ class AutoMosaicWindow(QMainWindow):
 
     def _process_all(self) -> None:
         if not self.image_paths:
-            QMessageBox.information(self, "Auto Mosaic", "画像を追加してください。")
+            QMessageBox.information(self, APP_NAME, "画像を追加してください。")
             return
         try:
             settings = self._settings()

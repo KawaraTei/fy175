@@ -1,4 +1,4 @@
-# Auto Mosaic
+# FY175AutoMosaic
 
 Windows上でPNG/JPEG画像をまとめて確認し、検出した対象へモザイクまたは
 ぼかしを適用するデスクトップアプリです。画像は外部へ送信されず、すべて
@@ -18,10 +18,10 @@ Windows上でPNG/JPEG画像をまとめて確認し、検出した対象へモ�
 ### Windows配布版を使う場合
 
 1. 配布されたZIPを展開します。
-2. `AutoMosaic`フォルダ内の`AutoMosaic.exe`を起動します。
+2. `FY175AutoMosaic`フォルダ内の`FY175AutoMosaic.exe`を起動します。
 
-`AutoMosaic.exe`だけを別の場所へ移動しないでください。モデルや動作に必要な
-ファイルを含むため、展開した`AutoMosaic`フォルダ全体をそのまま使用します。
+`FY175AutoMosaic.exe`だけを別の場所へ移動しないでください。モデルや動作に必要な
+ファイルを含むため、展開した`FY175AutoMosaic`フォルダ全体をそのまま使用します。
 
 ### ソースコードから起動する場合
 
@@ -72,7 +72,7 @@ python -m venv .venv
 
 Copyright (C) 2026 Hiyoko Typing
 
-Auto Mosaicの独自コードはGNU Affero General Public License version 3 only
+FY175AutoMosaicの独自コードはGNU Affero General Public License version 3 only
 （`AGPL-3.0-only`）で公開します。完全な条文は`LICENSE`を参照してください。
 
 モデルと依存ライブラリには個別のライセンスおよび表示義務があります。

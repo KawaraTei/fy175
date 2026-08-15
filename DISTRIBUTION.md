@@ -21,7 +21,7 @@ releases. It is operational guidance, not legal advice.
 
 - [ ] Build only from a tagged, public source revision and record that tag or
   commit in the release notes.
-- [ ] Verify that `dist/AutoMosaic` includes `LICENSE`, `NOTICE`,
+- [ ] Verify that `dist/FY175AutoMosaic` includes `LICENSE`, `NOTICE`,
   `THIRD_PARTY_NOTICES.md`, `MODEL_LICENSES.md`, `DISTRIBUTION.md`, and
   `LICENSES/`.
 - [ ] Provide the exact corresponding source code at no charge, including build

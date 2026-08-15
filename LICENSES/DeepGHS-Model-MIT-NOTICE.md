@@ -26,6 +26,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Because the model metadata identifies an Ultralytics YOLOv8 lineage, Auto Mosaic
+Because the model metadata identifies an Ultralytics YOLOv8 lineage, FY175AutoMosaic
 also follows the conservative AGPL-3.0 publication policy described in
 `../MODEL_LICENSES.md`.

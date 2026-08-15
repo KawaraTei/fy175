@@ -1,3 +1,3 @@
-"""Auto Mosaic prototype package."""
+"""FY175AutoMosaic application package."""
 
 __version__ = "0.1.0"

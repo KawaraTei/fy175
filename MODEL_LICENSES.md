@@ -1,6 +1,6 @@
 # Model Sources and Licenses
 
-Auto Mosaic does not train or own the model weights listed below. The download
+FY175AutoMosaic does not train or own the model weights listed below. The download
 script retrieves fixed files and verifies their SHA-256 values. Model weights
 are intentionally excluded from the Git repository by `.gitignore`.
 

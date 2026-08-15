@@ -1,1 +1,1 @@
-"""Test package for the Auto Mosaic prototype."""
+"""Test package for FY175AutoMosaic."""

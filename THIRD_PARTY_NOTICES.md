@@ -1,9 +1,9 @@
 # Third-Party Notices
 
-This document records the third-party software and model files used by Auto
-Mosaic. Copyright in each component remains with its respective owner.
+This document records the third-party software and model files used by
+FY175AutoMosaic. Copyright in each component remains with its respective owner.
 
-The license of Auto Mosaic itself is GNU Affero General Public License version
+The license of FY175AutoMosaic itself is GNU Affero General Public License version
 3 only (`AGPL-3.0-only`). See [`LICENSE`](LICENSE). Third-party components keep
 their own licenses; the application license does not replace them.
 
@@ -50,7 +50,7 @@ metadata conflict, and rules for replacing or redistributing model files.
 
 ## Source availability
 
-Auto Mosaic is intended to be published with its complete corresponding source
+FY175AutoMosaic is intended to be published with its complete corresponding source
 code. If you redistribute a binary, provide recipients with the exact source
 for that binary and preserve all license and notice files. See
 [`DISTRIBUTION.md`](DISTRIBUTION.md) for the release checklist.

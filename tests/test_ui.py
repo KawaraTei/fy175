@@ -16,6 +16,8 @@ from auto_mosaic.ui import AutoMosaicWindow
 def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
     app = QApplication.instance() or QApplication([])
     window = AutoMosaicWindow()
+    assert window.windowTitle() == "FY175AutoMosaic"
+    assert window.mode_combo.currentText() == "イラスト"
 
     def fake_analyze(path, _settings):
         image = load_image_bgr(path)

@@ -7,6 +7,7 @@ from auto_mosaic.image_ops import (
     apply_effect,
     bounded_mask,
     center_anchored_component,
+    paint_mask_stroke,
     refine_mask,
 )
 
@@ -48,3 +49,17 @@ def test_center_anchored_component_rejects_mask_outside_center_area() -> None:
     mask[30:38, 40:48] = True
     selected = center_anchored_component(mask, (40, 30, 62, 52))
     assert not np.any(selected)
+
+
+def test_paint_mask_stroke_adds_and_erases_with_round_brush() -> None:
+    mask = np.zeros((80, 100), dtype=bool)
+    assert paint_mask_stroke(mask, (20, 40), (70, 40), 12)
+    assert mask[40, 20]
+    assert mask[40, 45]
+    assert mask[40, 70]
+    assert not mask[20, 45]
+
+    assert paint_mask_stroke(mask, (40, 40), (50, 40), 8, erase=True)
+    assert not mask[40, 45]
+    assert mask[40, 20]
+    assert mask[40, 70]

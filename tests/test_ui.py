@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
 from PySide6.QtGui import QDropEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from auto_mosaic.domain import ProcessingResult
@@ -18,6 +19,8 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
     window = AutoMosaicWindow()
     assert window.windowTitle() == "FY175AutoMosaic"
     assert window.mode_combo.currentText() == "イラスト"
+    window.show()
+    app.processEvents()
 
     def fake_analyze(path, _settings):
         image = load_image_bgr(path)
@@ -33,7 +36,8 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         folder = Path(temporary)
         first = folder / "first.png"
         second = folder / "second.jpg"
-        Image.new("RGB", (12, 8), (200, 100, 50)).save(first)
+        first_pixels = np.arange(12 * 8 * 3, dtype=np.uint8).reshape(8, 12, 3)
+        Image.fromarray(first_pixels).save(first)
         Image.new("RGB", (10, 10), (20, 80, 160)).save(second)
 
         mime_data = QMimeData()
@@ -64,7 +68,85 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert window.list_splitter.orientation() == Qt.Orientation.Vertical
         assert window.list_splitter.count() == 2
 
+        window.preview_mode_combo.setCurrentText("検出範囲")
+        app.processEvents()
+        assert window.mask_edit_button.isEnabled()
+        window._toggle_mask_edit()
+        assert window.mask_edit_active
+        assert window.preview_label.mask_editing
+        assert window.preview_mode_combo.isEnabled()
+        assert not window.process_button.isEnabled()
+        assert window.process_current_button.isEnabled()
+        assert not window.brush_size_slider.isHidden()
+        border_color = window.preview_label.pixmap().toImage().pixelColor(2, 2)
+        assert border_color.red() > 200
+        assert border_color.green() < 120
+
+        window.brush_size_slider.setValue(4)
+        center = window.preview_image_rect.center()
+        QTest.mouseMove(window.preview_label, center.toPoint())
+        assert window.preview_label.brush_position is not None
+        assert window.preview_label.brush_diameter > 0
+        QTest.mouseClick(
+            window.preview_label,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            center.toPoint(),
+        )
+        assert window.mask_edit_dirty
+        assert window.edited_mask is not None
+        assert np.any(window.edited_mask)
+        QTest.mouseClick(
+            window.preview_label,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.AltModifier,
+            center.toPoint(),
+        )
+        assert not window.edited_mask[
+            window.edited_mask.shape[0] // 2,
+            window.edited_mask.shape[1] // 2,
+        ]
+        retained_point = QPointF(
+            center.x() + window.preview_image_rect.width() / 4,
+            center.y(),
+        )
+        QTest.mouseClick(
+            window.preview_label,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            retained_point.toPoint(),
+        )
+        assert np.any(window.edited_mask)
+
+        edited_before_preview_switch = window.edited_mask.copy()
+        window.preview_mode_combo.setCurrentText("処理結果")
+        app.processEvents()
+        assert window.mask_edit_active
+        assert not window.preview_label.mask_editing
+        assert window.preview_label.brush_position is None
+        assert np.array_equal(window.edited_mask, edited_before_preview_switch)
+        assert window.preview_rgb is not None
+        assert np.any(window.preview_rgb != first_pixels)
+        result_border = window.preview_label.pixmap().toImage().pixelColor(2, 2)
+        assert result_border.red() > 200
+        window.preview_mode_combo.setCurrentText("検出範囲")
+        app.processEvents()
+        assert window.mask_edit_active
+        assert window.preview_label.mask_editing
+        assert np.array_equal(window.edited_mask, edited_before_preview_switch)
+
+        original_confirm = window._confirm_discard_mask_edit
+        window._confirm_discard_mask_edit = lambda *_args, **_kwargs: False  # type: ignore[method-assign]
         window.file_list.setCurrentRow(1)
+        app.processEvents()
+        assert window.file_list.currentRow() == 0
+        assert window.mask_edit_active
+        window._confirm_discard_mask_edit = original_confirm  # type: ignore[method-assign]
+        window._end_mask_edit(refresh_preview=True)
+
+        window.file_list.clearSelection()
+        window.file_list.setCurrentRow(1)
+        window.file_list.item(1).setSelected(True)
         app.processEvents()
         window._remove_selected()
         assert window.image_paths == [first.resolve()]

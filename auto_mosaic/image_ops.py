@@ -52,6 +52,39 @@ def apply_effect(
     return result
 
 
+def paint_mask_stroke(
+    mask: np.ndarray,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    diameter: int,
+    erase: bool = False,
+) -> bool:
+    """Paint one round brush stroke into a boolean mask and report any change."""
+    if mask.ndim != 2:
+        raise ValueError("mask must be a two-dimensional array")
+    brush_diameter = max(1, int(diameter))
+    radius = max(1, brush_diameter // 2)
+    height, width = mask.shape
+    left = max(0, min(start[0], end[0]) - radius - 1)
+    top = max(0, min(start[1], end[1]) - radius - 1)
+    right = min(width, max(start[0], end[0]) + radius + 2)
+    bottom = min(height, max(start[1], end[1]) + radius + 2)
+    if left >= right or top >= bottom:
+        return False
+
+    region = mask[top:bottom, left:right]
+    before = region.copy()
+    binary = region.astype(np.uint8)
+    local_start = (start[0] - left, start[1] - top)
+    local_end = (end[0] - left, end[1] - top)
+    color = 0 if erase else 1
+    cv2.line(binary, local_start, local_end, color, brush_diameter, cv2.LINE_8)
+    cv2.circle(binary, local_start, radius, color, -1, cv2.LINE_8)
+    cv2.circle(binary, local_end, radius, color, -1, cv2.LINE_8)
+    region[:] = binary > 0
+    return not np.array_equal(region, before)
+
+
 def refine_mask(mask: np.ndarray, expansion: int) -> np.ndarray:
     binary = mask.astype(np.uint8) * 255
     if expansion > 0:

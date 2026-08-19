@@ -6,7 +6,7 @@ from threading import Lock
 import numpy as np
 
 from auto_mosaic.detector import YoloOnnxDetector
-from auto_mosaic.domain import ImageMode, ProcessingResult, ProcessingSettings
+from auto_mosaic.domain import Detection, ImageMode, ProcessingResult, ProcessingSettings
 from auto_mosaic.image_ops import (
     apply_effect,
     bounded_mask,
@@ -103,6 +103,28 @@ class MosaicPipeline:
             sequence += 1
         save_image_bgr(output_path, result.image_bgr)
         return output_path
+
+    def process_with_mask(
+        self,
+        path: Path,
+        mask: np.ndarray,
+        settings: ProcessingSettings,
+        detections: list[Detection],
+        used_box_fallbacks: int = 0,
+    ) -> ProcessingResult:
+        image = load_image_bgr(path)
+        if mask.shape != image.shape[:2]:
+            raise ValueError("編集中のマスクサイズが画像と一致しません。")
+        edited_mask = mask.astype(bool, copy=True)
+        return ProcessingResult(
+            source_path=path,
+            image_bgr=apply_effect(
+                image, edited_mask, settings.effect, settings.effect_size
+            ),
+            mask=edited_mask,
+            detections=list(detections),
+            used_box_fallbacks=used_box_fallbacks,
+        )
 
     def _get_detector(self, mode: ImageMode) -> YoloOnnxDetector:
         if mode not in self._detectors:

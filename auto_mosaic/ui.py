@@ -7,9 +7,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
+    QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QImage,
@@ -391,6 +392,11 @@ class AutoMosaicWindow(QMainWindow):
         browse.setFixedWidth(38)
         output_row.addWidget(browse)
         right_layout.addLayout(output_row)
+
+        self.open_output_button = self._button(
+            "エクスプローラで表示", self._open_output_folder
+        )
+        right_layout.addWidget(self.open_output_button)
 
         right_layout.addWidget(self._section_label("出力suffix"))
         self.suffix_edit = QLineEdit("_mosaic")
@@ -871,6 +877,25 @@ class AutoMosaicWindow(QMainWindow):
         )
         if selected:
             self.output_edit.setText(selected)
+
+    def _open_output_folder(self) -> None:
+        output_dir = Path(self.output_edit.text())
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            QMessageBox.warning(
+                self,
+                "出力フォルダ",
+                f"フォルダを作成できません。\n{error}",
+            )
+            return
+        output_url = QUrl.fromLocalFile(str(output_dir.resolve()))
+        if not QDesktopServices.openUrl(output_url):
+            QMessageBox.warning(
+                self,
+                "出力フォルダ",
+                "エクスプローラでフォルダを開けませんでした。",
+            )
 
     def _show_original(self, path: Path) -> None:
         try:

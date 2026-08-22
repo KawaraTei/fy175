@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -12,6 +13,24 @@ from PySide6.QtWidgets import QApplication
 from auto_mosaic.domain import ProcessingResult
 from auto_mosaic.image_ops import load_image_bgr
 from auto_mosaic.ui import AutoMosaicWindow
+
+
+def test_open_output_folder_button_creates_and_reveals_folder() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    with TemporaryDirectory() as temporary:
+        output_dir = Path(temporary) / "new-output"
+        window.output_edit.setText(str(output_dir))
+
+        with patch(
+            "auto_mosaic.ui.QDesktopServices.openUrl", return_value=True
+        ) as open_url:
+            window.open_output_button.click()
+
+        assert window.open_output_button.text() == "エクスプローラで表示"
+        assert output_dir.is_dir()
+        assert Path(open_url.call_args.args[0].toLocalFile()) == output_dir.resolve()
+    window.close()
 
 
 def test_drop_multiple_images_and_analyze_selected_automatically() -> None:

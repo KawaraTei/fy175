@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from auto_mosaic.domain import EffectType
+from auto_mosaic.domain import Detection, EffectType
 from auto_mosaic.image_ops import (
     apply_effect,
     bounded_mask,
     center_anchored_component,
     paint_mask_stroke,
     refine_mask,
+    visualize_detection,
 )
 
 
@@ -63,3 +64,17 @@ def test_paint_mask_stroke_adds_and_erases_with_round_brush() -> None:
     assert not mask[40, 45]
     assert mask[40, 20]
     assert mask[40, 70]
+
+
+def test_visualize_detection_draws_below_threshold_boxes_in_gray() -> None:
+    image = np.zeros((40, 40, 3), dtype=np.uint8)
+    mask = np.zeros((40, 40), dtype=bool)
+    preview = visualize_detection(
+        image,
+        mask,
+        [Detection("penis", 0.9, (2, 2, 12, 12))],
+        [Detection("penis", 0.2, (20, 20, 32, 32))],
+    )
+
+    assert tuple(preview[12, 7]) == (80, 220, 255)
+    assert tuple(preview[32, 26]) == (150, 150, 150)

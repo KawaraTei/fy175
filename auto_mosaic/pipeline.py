@@ -24,6 +24,9 @@ from auto_mosaic.model_catalog import (
 from auto_mosaic.segmenter import Sam2OnnxSegmenter
 
 
+BELOW_THRESHOLD_PREVIEW_LIMIT = 5
+
+
 class MosaicPipeline:
     def __init__(self, model_dir: Path) -> None:
         self.model_dir = model_dir
@@ -35,12 +38,23 @@ class MosaicPipeline:
         with self._lock:
             image = load_image_bgr(path)
             detector = self._get_detector(settings.mode)
-            detections = detector.detect(
+            detection_candidates = detector.detect(
                 image,
                 settings.targets,
                 settings.confidence_threshold,
                 settings.iou_threshold,
+                BELOW_THRESHOLD_PREVIEW_LIMIT,
             )
+            detections = [
+                detection
+                for detection in detection_candidates
+                if detection.confidence >= settings.confidence_threshold
+            ]
+            below_threshold_detections = [
+                detection
+                for detection in detection_candidates
+                if detection.confidence < settings.confidence_threshold
+            ][:BELOW_THRESHOLD_PREVIEW_LIMIT]
             combined_mask = np.zeros(image.shape[:2], dtype=bool)
             fallback_count = 0
             if detections:
@@ -83,6 +97,7 @@ class MosaicPipeline:
                 image_bgr=effected,
                 mask=combined_mask,
                 detections=detections,
+                below_threshold_detections=below_threshold_detections,
                 used_box_fallbacks=fallback_count,
             )
 
@@ -111,6 +126,7 @@ class MosaicPipeline:
         settings: ProcessingSettings,
         detections: list[Detection],
         used_box_fallbacks: int = 0,
+        below_threshold_detections: list[Detection] | None = None,
     ) -> ProcessingResult:
         image = load_image_bgr(path)
         if mask.shape != image.shape[:2]:
@@ -123,6 +139,7 @@ class MosaicPipeline:
             ),
             mask=edited_mask,
             detections=list(detections),
+            below_threshold_detections=list(below_threshold_detections or []),
             used_box_fallbacks=used_box_fallbacks,
         )
 

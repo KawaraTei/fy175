@@ -41,4 +41,5 @@ class ProcessingResult:
     image_bgr: np.ndarray
     mask: np.ndarray
     detections: list[Detection] = field(default_factory=list)
+    below_threshold_detections: list[Detection] = field(default_factory=list)
     used_box_fallbacks: int = 0

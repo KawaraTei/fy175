@@ -29,6 +29,7 @@ class YoloOnnxDetector:
         targets: frozenset[str],
         confidence_threshold: float,
         iou_threshold: float,
+        below_threshold_limit: int = 0,
     ) -> list[Detection]:
         tensor, scale, pad_x, pad_y = self._prepare_input(image_bgr)
         raw = self.session.run(self.output_names, {self.input_name: tensor})[0]
@@ -52,7 +53,9 @@ class YoloOnnxDetector:
             class_scores = row[4 : 4 + len(self.spec.class_names)]
             class_id = int(np.argmax(class_scores))
             confidence = float(class_scores[class_id])
-            if class_id not in wanted_indices or confidence < confidence_threshold:
+            if class_id not in wanted_indices:
+                continue
+            if confidence < confidence_threshold and below_threshold_limit <= 0:
                 continue
 
             center_x, center_y, width, height = (float(value) for value in row[:4])
@@ -72,11 +75,10 @@ class YoloOnnxDetector:
         if not boxes_xywh:
             return []
 
-        selected = cv2.dnn.NMSBoxes(
-            boxes_xywh, scores, confidence_threshold, iou_threshold
-        )
+        score_threshold = 0.0 if below_threshold_limit > 0 else confidence_threshold
+        selected = cv2.dnn.NMSBoxes(boxes_xywh, scores, score_threshold, iou_threshold)
         selected_indices = np.asarray(selected).reshape(-1).tolist()
-        return [
+        selected_detections = [
             Detection(
                 class_name=self._public_name(class_ids[index]),
                 confidence=scores[index],
@@ -89,6 +91,18 @@ class YoloOnnxDetector:
             )
             for index in selected_indices
         ]
+        selected_detections.sort(key=lambda detection: detection.confidence, reverse=True)
+        accepted = [
+            detection
+            for detection in selected_detections
+            if detection.confidence >= confidence_threshold
+        ]
+        below_threshold = [
+            detection
+            for detection in selected_detections
+            if detection.confidence < confidence_threshold
+        ][: max(0, below_threshold_limit)]
+        return accepted + below_threshold
 
     def _prepare_input(
         self, image_bgr: np.ndarray

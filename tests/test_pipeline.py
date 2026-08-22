@@ -73,7 +73,10 @@ def test_process_with_mask_uses_edited_mask_without_detection() -> None:
 
 class _FakeDetector:
     def detect(self, *_args):
-        return [Detection("penis", 0.9, (20, 20, 40, 40))]
+        return [
+            Detection("penis", 0.9, (20, 20, 40, 40)),
+            Detection("penis", 0.2, (2, 2, 12, 12)),
+        ]
 
 
 class _FakeSegmenter:
@@ -114,6 +117,10 @@ def test_analyze_prefers_centered_mask_over_higher_scored_unrelated_mask() -> No
     assert result.mask[30, 30]
     assert not result.mask[23, 23]
     assert result.used_box_fallbacks == 0
+    assert result.detections == [Detection("penis", 0.9, (20, 20, 40, 40))]
+    assert result.below_threshold_detections == [
+        Detection("penis", 0.2, (2, 2, 12, 12))
+    ]
 
 
 def test_analyze_falls_back_to_detection_box_when_no_mask_is_centered() -> None:

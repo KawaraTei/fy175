@@ -150,6 +150,7 @@ def visualize_detection(
     image_bgr: np.ndarray,
     mask: np.ndarray,
     detections: list[Detection],
+    below_threshold_detections: list[Detection] | None = None,
 ) -> np.ndarray:
     result = image_bgr.copy()
     overlay = result.copy()
@@ -180,6 +181,30 @@ def visualize_detection(
             cv2.FONT_HERSHEY_SIMPLEX,
             0.58,
             (80, 240, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    for detection in below_threshold_detections or []:
+        x1, y1, x2, y2 = detection.box
+        cv2.rectangle(result, (x1, y1), (x2, y2), (150, 150, 150), 2)
+        label = f"{detection.class_name} {detection.confidence:.0%}"
+        cv2.putText(
+            result,
+            label,
+            (x1, max(20, y1 - 7)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            (20, 20, 20),
+            4,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            result,
+            label,
+            (x1, max(20, y1 - 7)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            (175, 175, 175),
             1,
             cv2.LINE_AA,
         )

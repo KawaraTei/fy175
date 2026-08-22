@@ -810,6 +810,7 @@ class AutoMosaicWindow(QMainWindow):
                         settings,
                         edit_reference.detections,
                         edit_reference.used_box_fallbacks,
+                        edit_reference.below_threshold_detections,
                     )
                 else:
                     result = self.pipeline.analyze(path, settings)
@@ -897,7 +898,12 @@ class AutoMosaicWindow(QMainWindow):
                 else self.current_result.mask
             )
             self._set_preview_bgr(
-                visualize_detection(original, mask, self.current_result.detections)
+                visualize_detection(
+                    original,
+                    mask,
+                    self.current_result.detections,
+                    self.current_result.below_threshold_detections,
+                )
             )
         elif self.mask_edit_active and self.edited_mask is not None:
             original = (

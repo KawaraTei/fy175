@@ -562,6 +562,7 @@ class AutoMosaicWindow(QMainWindow):
         rows = sorted(set(rows), reverse=True)
         if not rows:
             return
+        next_row = rows[-1]
         if not self._confirm_discard_mask_edit("画像をリストから除去", refresh_after=False):
             return
         self.analysis_generation += 1
@@ -577,16 +578,19 @@ class AutoMosaicWindow(QMainWindow):
         for row in rows:
             self.file_list.takeItem(row)
             del self.image_paths[row]
+        self.file_list.clearSelection()
+        self.file_list.setCurrentRow(-1)
         self.file_list.blockSignals(False)
         self.current_result = None
         self.file_count_label.setText(f"{len(self.image_paths)} / {MAX_IMAGES}")
-        if self.image_paths:
-            self.file_list.setCurrentRow(min(rows[-1] if rows else 0, len(self.image_paths) - 1))
+        if next_row < len(self.image_paths):
+            self.file_list.setCurrentRow(next_row)
         else:
             self.preview_rgb = None
             self.preview_label.setPixmap(QPixmap())
             self.preview_label.set_image_rect(QRectF())
             self.preview_label.setText("プレビュー")
+            self.status_label.setText("画像を選択してください")
 
     def _clear_manual_review(self) -> None:
         self.manual_review_paths.clear()

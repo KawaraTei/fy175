@@ -91,6 +91,54 @@ def test_open_output_folder_button_creates_and_reveals_folder() -> None:
     window.close()
 
 
+def test_remove_selected_moves_to_next_image_or_clears_tail_selection() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    window.show()
+    app.processEvents()
+
+    def fake_analyze(path, _settings):
+        image = load_image_bgr(path)
+        return ProcessingResult(
+            source_path=path,
+            image_bgr=image,
+            mask=np.zeros(image.shape[:2], dtype=bool),
+        )
+
+    window.pipeline.analyze = fake_analyze  # type: ignore[method-assign]
+
+    with TemporaryDirectory() as temporary:
+        folder = Path(temporary)
+        paths = [folder / f"image-{index}.png" for index in range(3)]
+        colors = [(20, 40, 60), (80, 100, 120), (140, 160, 180)]
+        for path, color in zip(paths, colors):
+            Image.new("RGB", (12, 8), color).save(path)
+
+        window._add_image_paths(paths)
+        window.file_list.clearSelection()
+        window.file_list.setCurrentRow(1)
+        window.file_list.item(1).setSelected(True)
+        app.processEvents()
+        window._remove_selected()
+
+        assert window.image_paths == [paths[0].resolve(), paths[2].resolve()]
+        assert window.file_list.currentRow() == 1
+        assert window._selected_path() == paths[2].resolve()
+        assert window.preview_rgb is not None
+        assert tuple(window.preview_rgb[0, 0]) == colors[2]
+
+        window._remove_selected()
+
+        assert window.image_paths == [paths[0].resolve()]
+        assert window.file_list.currentRow() == -1
+        assert window.file_list.selectedItems() == []
+        assert window.preview_rgb is None
+        assert window.preview_label.pixmap().isNull()
+        assert window.preview_label.text() == "プレビュー"
+
+    window.close()
+
+
 def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
     app = QApplication.instance() or QApplication([])
     window = AutoMosaicWindow()

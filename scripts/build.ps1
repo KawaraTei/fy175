@@ -9,14 +9,24 @@ if (-not (Test-Path '.venv\Scripts\python.exe')) {
 & '.venv\Scripts\python.exe' -m pip install -r requirements.txt
 & '.venv\Scripts\python.exe' scripts\download_models.py
 
-& '.venv\Scripts\pyinstaller.exe' `
-    --noconfirm `
-    --clean `
-    --windowed `
-    --onedir `
-    --name FY175AutoMosaic `
-    --add-data 'models;models' `
-    auto_mosaic\app.py
+$originalPath = $env:PATH
+try {
+    $env:PATH = "$([Environment]::SystemDirectory);$originalPath"
+    & '.venv\Scripts\pyinstaller.exe' `
+        --noconfirm `
+        --clean `
+        --windowed `
+        --onedir `
+        --name FY175AutoMosaic `
+        --add-data 'models;models' `
+        auto_mosaic\app.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    $env:PATH = $originalPath
+}
 
 Copy-Item -LiteralPath 'README.md' -Destination 'dist\FY175AutoMosaic\README.md' -Force
 Copy-Item -LiteralPath 'LICENSE' -Destination 'dist\FY175AutoMosaic\LICENSE' -Force

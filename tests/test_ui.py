@@ -5,14 +5,72 @@ from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
-from PySide6.QtGui import QDropEvent
+from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt, QUrl
+from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from auto_mosaic.domain import ProcessingResult
 from auto_mosaic.image_ops import load_image_bgr
 from auto_mosaic.ui import AutoMosaicWindow
+
+
+
+def _send_wheel(widget, position: QPointF, delta: int) -> None:
+    event = QWheelEvent(
+        position,
+        position,
+        QPoint(),
+        QPoint(0, delta),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(widget, event)
+
+
+def test_mask_edit_wheel_zoom_uses_cursor_or_image_center_anchor() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    window.show()
+    app.processEvents()
+
+    window.preview_rgb = np.zeros((300, 500, 3), dtype=np.uint8)
+    window.edited_mask = np.zeros((300, 500), dtype=bool)
+    window.mask_edit_active = True
+    window._update_mask_editor_interaction()
+    window._render_preview()
+    initial_rect = QRectF(window.preview_image_rect)
+
+    cursor = QPointF(
+        initial_rect.left() + initial_rect.width() * 0.7,
+        initial_rect.top() + initial_rect.height() * 0.4,
+    )
+    _send_wheel(window.preview_label, cursor, 120)
+    zoomed_rect = QRectF(window.preview_image_rect)
+    assert zoomed_rect.width() > initial_rect.width()
+    assert abs((cursor.x() - zoomed_rect.left()) / zoomed_rect.width() - 0.7) < 0.01
+    assert abs((cursor.y() - zoomed_rect.top()) / zoomed_rect.height() - 0.4) < 0.01
+
+    outside = QPointF(1, 1)
+    assert not zoomed_rect.contains(outside)
+    center_before = zoomed_rect.center()
+    _send_wheel(window.preview_label, outside, 120)
+    center_after = window.preview_image_rect.center()
+    assert abs(center_after.x() - center_before.x()) < 1.0
+    assert abs(center_after.y() - center_before.y()) < 1.0
+
+    while window.mask_edit_zoom_index > 0:
+        _send_wheel(window.preview_label, window.preview_image_rect.center(), -120)
+    minimum_rect = QRectF(window.preview_image_rect)
+    _send_wheel(window.preview_label, minimum_rect.center(), -120)
+    assert window.mask_edit_zoom_index == 0
+    assert abs(window.preview_image_rect.width() - initial_rect.width()) < 1.0
+    assert abs(window.preview_image_rect.height() - initial_rect.height()) < 1.0
+
+    window._end_mask_edit(refresh_preview=False)
+    window.close()
 
 
 def test_open_output_folder_button_creates_and_reveals_folder() -> None:

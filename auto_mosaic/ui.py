@@ -54,7 +54,7 @@ from auto_mosaic.pipeline import MosaicPipeline
 
 APP_NAME = "FY175AutoMosaic"
 MAX_IMAGES = 100
-MASK_EDIT_ZOOM_LEVELS = (1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
+PREVIEW_ZOOM_LEVELS = (1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
 
 
 class MaskPreviewLabel(QLabel):
@@ -222,7 +222,7 @@ class AutoMosaicWindow(QMainWindow):
         self.edited_mask: np.ndarray | None = None
         self.mask_edit_original_bgr: np.ndarray | None = None
         self.preview_image_rect = QRectF()
-        self.mask_edit_zoom_index = 0
+        self.preview_zoom_index = 0
         self.preview_render_target_size = (0, 0)
         self.busy = False
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -317,7 +317,7 @@ class AutoMosaicWindow(QMainWindow):
         self.preview_label.setMinimumSize(320, 320)
         self.preview_label.setObjectName("preview")
         self.preview_label.stroke_requested.connect(self._paint_mask_stroke)
-        self.preview_label.zoom_requested.connect(self._zoom_mask_preview)
+        self.preview_label.zoom_requested.connect(self._zoom_preview)
         center_layout.addWidget(self.preview_label, 1)
         preview_bar = QFrame()
         preview_bar.setObjectName("previewBar")
@@ -586,9 +586,11 @@ class AutoMosaicWindow(QMainWindow):
         if next_row < len(self.image_paths):
             self.file_list.setCurrentRow(next_row)
         else:
+            self.preview_zoom_index = 0
             self.preview_rgb = None
             self.preview_label.setPixmap(QPixmap())
             self.preview_label.set_image_rect(QRectF())
+            self.preview_label.set_zoom_enabled(False)
             self.preview_label.setText("プレビュー")
             self.status_label.setText("画像を選択してください")
 
@@ -604,9 +606,11 @@ class AutoMosaicWindow(QMainWindow):
         self.image_paths.clear()
         self.file_list.clear()
         self.current_result = None
+        self.preview_zoom_index = 0
         self.preview_rgb = None
         self.preview_label.setPixmap(QPixmap())
         self.preview_label.set_image_rect(QRectF())
+        self.preview_label.set_zoom_enabled(False)
         self.preview_label.setText("プレビュー")
         self.file_count_label.setText(f"0 / {MAX_IMAGES}")
 
@@ -629,6 +633,7 @@ class AutoMosaicWindow(QMainWindow):
                     self.file_list.blockSignals(False)
                 return
             self.current_result = None
+            self.preview_zoom_index = 0
             self._show_original(next_path)
             self.analysis_generation += 1
             generation = self.analysis_generation
@@ -668,7 +673,6 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path = path
         self.edited_mask = self.current_result.mask.copy()
         self.mask_edit_original_bgr = load_image_bgr(path)
-        self.mask_edit_zoom_index = 0
         self._update_mask_editor_interaction()
         self._update_mask_edit_controls()
         self._refresh_preview()
@@ -701,9 +705,7 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path = None
         self.edited_mask = None
         self.mask_edit_original_bgr = None
-        self.mask_edit_zoom_index = 0
-        self.preview_label.set_mask_editing(False)
-        self.preview_label.set_zoom_enabled(False)
+        self._update_mask_editor_interaction()
         self._update_mask_edit_controls()
         if refresh_preview:
             self._refresh_preview()
@@ -743,14 +745,12 @@ class AutoMosaicWindow(QMainWindow):
             and not self.busy
             and self.preview_mode_combo.currentText() == "検出範囲"
         )
-        self.preview_label.set_zoom_enabled(self.mask_edit_active and not self.busy)
+        self.preview_label.set_zoom_enabled(self.preview_rgb is not None)
         self._update_brush_display_size()
 
-    def _zoom_mask_preview(self, position: QPointF, direction: int) -> None:
+    def _zoom_preview(self, position: QPointF, direction: int) -> None:
         if (
-            not self.mask_edit_active
-            or self.busy
-            or self.preview_rgb is None
+            self.preview_rgb is None
             or self.preview_image_rect.isEmpty()
             or direction == 0
         ):
@@ -759,11 +759,11 @@ class AutoMosaicWindow(QMainWindow):
         next_index = max(
             0,
             min(
-                len(MASK_EDIT_ZOOM_LEVELS) - 1,
-                self.mask_edit_zoom_index + (1 if direction > 0 else -1),
+                len(PREVIEW_ZOOM_LEVELS) - 1,
+                self.preview_zoom_index + (1 if direction > 0 else -1),
             ),
         )
-        if next_index == self.mask_edit_zoom_index:
+        if next_index == self.preview_zoom_index:
             return
 
         current_rect = self.preview_image_rect
@@ -777,7 +777,7 @@ class AutoMosaicWindow(QMainWindow):
             display_anchor = current_rect.center()
             image_anchor = QPointF(0.5, 0.5)
 
-        self.mask_edit_zoom_index = next_index
+        self.preview_zoom_index = next_index
         self._render_preview((display_anchor, image_anchor))
 
     def _update_brush_display_size(self) -> None:
@@ -995,6 +995,7 @@ class AutoMosaicWindow(QMainWindow):
                     mask,
                     self.current_result.detections,
                     self.current_result.below_threshold_detections,
+                    show_detection_annotations=not self.mask_edit_active,
                 )
             )
         elif self.mask_edit_active and self.edited_mask is not None:
@@ -1052,6 +1053,7 @@ class AutoMosaicWindow(QMainWindow):
 
     def _set_preview_bgr(self, image_bgr: np.ndarray) -> None:
         self.preview_rgb = np.ascontiguousarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+        self.preview_label.set_zoom_enabled(True)
         self._render_preview()
 
     @staticmethod
@@ -1090,11 +1092,7 @@ class AutoMosaicWindow(QMainWindow):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        zoom = (
-            MASK_EDIT_ZOOM_LEVELS[self.mask_edit_zoom_index]
-            if self.mask_edit_active
-            else MASK_EDIT_ZOOM_LEVELS[0]
-        )
+        zoom = PREVIEW_ZOOM_LEVELS[self.preview_zoom_index]
         pixmap = QPixmap.fromImage(image).scaled(
             max(1, round(base_pixmap.width() * zoom)),
             max(1, round(base_pixmap.height() * zoom)),
@@ -1104,8 +1102,7 @@ class AutoMosaicWindow(QMainWindow):
 
         target_size = (target.width(), target.height())
         can_reuse_position = (
-            self.mask_edit_active
-            and self.mask_edit_zoom_index > 0
+            self.preview_zoom_index > 0
             and not self.preview_image_rect.isEmpty()
             and self.preview_render_target_size == target_size
         )

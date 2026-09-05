@@ -151,6 +151,7 @@ def visualize_detection(
     mask: np.ndarray,
     detections: list[Detection],
     below_threshold_detections: list[Detection] | None = None,
+    show_detection_annotations: bool = True,
 ) -> np.ndarray:
     result = image_bgr.copy()
     overlay = result.copy()
@@ -160,6 +161,8 @@ def visualize_detection(
         mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
     cv2.drawContours(result, contours, -1, (40, 220, 255), 2)
+    if not show_detection_annotations:
+        return result
     for detection in detections:
         x1, y1, x2, y2 = detection.box
         cv2.rectangle(result, (x1, y1), (x2, y2), (80, 220, 255), 2)

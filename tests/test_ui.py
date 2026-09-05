@@ -10,7 +10,7 @@ from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from auto_mosaic.domain import ProcessingResult
+from auto_mosaic.domain import Detection, ProcessingResult
 from auto_mosaic.image_ops import load_image_bgr
 from auto_mosaic.ui import AutoMosaicWindow
 
@@ -30,15 +30,13 @@ def _send_wheel(widget, position: QPointF, delta: int) -> None:
     QApplication.sendEvent(widget, event)
 
 
-def test_mask_edit_wheel_zoom_uses_cursor_or_image_center_anchor() -> None:
+def test_preview_wheel_zoom_uses_cursor_or_image_center_anchor() -> None:
     app = QApplication.instance() or QApplication([])
     window = AutoMosaicWindow()
     window.show()
     app.processEvents()
 
     window.preview_rgb = np.zeros((300, 500, 3), dtype=np.uint8)
-    window.edited_mask = np.zeros((300, 500), dtype=bool)
-    window.mask_edit_active = True
     window._update_mask_editor_interaction()
     window._render_preview()
     initial_rect = QRectF(window.preview_image_rect)
@@ -61,15 +59,14 @@ def test_mask_edit_wheel_zoom_uses_cursor_or_image_center_anchor() -> None:
     assert abs(center_after.x() - center_before.x()) < 1.0
     assert abs(center_after.y() - center_before.y()) < 1.0
 
-    while window.mask_edit_zoom_index > 0:
+    while window.preview_zoom_index > 0:
         _send_wheel(window.preview_label, window.preview_image_rect.center(), -120)
     minimum_rect = QRectF(window.preview_image_rect)
     _send_wheel(window.preview_label, minimum_rect.center(), -120)
-    assert window.mask_edit_zoom_index == 0
+    assert window.preview_zoom_index == 0
     assert abs(window.preview_image_rect.width() - initial_rect.width()) < 1.0
     assert abs(window.preview_image_rect.height() - initial_rect.height()) < 1.0
 
-    window._end_mask_edit(refresh_preview=False)
     window.close()
 
 
@@ -153,6 +150,7 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
             source_path=path,
             image_bgr=image,
             mask=np.zeros(image.shape[:2], dtype=bool),
+            detections=[Detection("penis", 0.9, (1, 1, 10, 7))],
         )
 
     window.pipeline.analyze = fake_analyze  # type: ignore[method-assign]
@@ -193,11 +191,34 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert window.list_splitter.orientation() == Qt.Orientation.Vertical
         assert window.list_splitter.count() == 2
 
+        for preview_mode in ("元画像", "検出範囲", "処理結果"):
+            window.preview_mode_combo.setCurrentText(preview_mode)
+            app.processEvents()
+            initial_width = window.preview_image_rect.width()
+            _send_wheel(
+                window.preview_label,
+                window.preview_image_rect.center(),
+                120,
+            )
+            assert window.preview_zoom_index == 1
+            assert window.preview_image_rect.width() > initial_width
+            _send_wheel(
+                window.preview_label,
+                window.preview_image_rect.center(),
+                -120,
+            )
+            assert window.preview_zoom_index == 0
+
         window.preview_mode_combo.setCurrentText("検出範囲")
         app.processEvents()
+        assert window.preview_rgb is not None
+        assert np.any(window.preview_rgb != first_pixels)
+        assert window.preview_label.zoom_enabled
         assert window.mask_edit_button.isEnabled()
         window._toggle_mask_edit()
         assert window.mask_edit_active
+        assert window.preview_rgb is not None
+        assert np.array_equal(window.preview_rgb, first_pixels)
         assert window.preview_label.mask_editing
         assert window.preview_mode_combo.isEnabled()
         assert not window.process_button.isEnabled()

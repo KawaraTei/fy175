@@ -76,5 +76,22 @@ def test_visualize_detection_draws_below_threshold_boxes_in_gray() -> None:
         [Detection("penis", 0.2, (20, 20, 32, 32))],
     )
 
-    assert tuple(preview[12, 7]) == (80, 220, 255)
+    assert tuple(preview[1, 7]) == (80, 220, 255)
     assert tuple(preview[32, 26]) == (150, 150, 150)
+
+
+def test_visualize_detection_can_hide_detection_annotations() -> None:
+    image = np.zeros((40, 40, 3), dtype=np.uint8)
+    mask = np.zeros((40, 40), dtype=bool)
+    detections = [Detection("penis", 0.9, (2, 2, 12, 12))]
+    below_threshold = [Detection("penis", 0.2, (20, 20, 32, 32))]
+
+    preview = visualize_detection(
+        image,
+        mask,
+        detections,
+        below_threshold,
+        show_detection_annotations=False,
+    )
+
+    assert np.array_equal(preview, image)

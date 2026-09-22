@@ -50,6 +50,7 @@ from auto_mosaic.image_ops import (
 )
 from auto_mosaic.model_catalog import required_model_paths
 from auto_mosaic.pipeline import MosaicPipeline
+from auto_mosaic.ui_style import APP_STYLE, section_label
 
 
 APP_NAME = "FY175AutoMosaic"
@@ -234,6 +235,22 @@ class AutoMosaicWindow(QMainWindow):
         self.poll_timer.timeout.connect(self._poll_events)
         self.poll_timer.start(100)
         self._update_model_status()
+        self.video_window = None
+        mode_menu = self.menuBar().addMenu("モード")
+        mode_menu.addAction("動画処理を開く…", self._open_video_mode)
+        # Keep the existing central image workspace at its original size.
+        menu_height = self.menuBar().sizeHint().height()
+        self.resize(1260, 790 + menu_height)
+        self.setMinimumSize(980, 650 + menu_height)
+
+    def _open_video_mode(self) -> None:
+        from auto_mosaic.video_ui import VideoMosaicWindow
+
+        if self.video_window is None:
+            self.video_window = VideoMosaicWindow()
+        self.video_window.show()
+        self.video_window.raise_()
+        self.video_window.activateWindow()
 
     def _build_layout(self) -> None:
         central = QWidget()
@@ -445,33 +462,7 @@ class AutoMosaicWindow(QMainWindow):
         body_layout.addWidget(right, 0, 2)
 
     def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow, QWidget { background: #17191f; color: #d9dde5; font-family: "Segoe UI"; font-size: 10pt; }
-            QFrame#toolbar, QFrame#panel, QFrame#previewBar { background: #20232b; }
-            QFrame#previewPanel { background: #0e1015; border: 1px solid #303540; }
-            QLabel#preview { color: #6f7787; background: #0e1015; }
-            QLabel#section { color: #f0f2f6; font-weight: 600; }
-            QLabel#muted { color: #8991a1; }
-            QLabel#value { color: #53b8ff; }
-            QPushButton { background: #356b92; color: white; border: none; border-radius: 3px; padding: 7px 12px; }
-            QPushButton:hover { background: #4f89b2; }
-            QPushButton:disabled { background: #3a3d45; color: #858993; }
-            QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
-            QListWidget::item { padding: 5px; }
-            QListWidget::item:selected { background: #356b92; color: white; }
-            QComboBox QAbstractItemView { background: #111319; color: #e5e8ef; selection-background-color: #356b92; }
-            QCheckBox { spacing: 8px; }
-            QCheckBox::indicator { width: 16px; height: 16px; }
-            QSlider::groove:horizontal { height: 5px; background: #3a404d; border-radius: 2px; }
-            QSlider::sub-page:horizontal { background: #53b8ff; border-radius: 2px; }
-            QSlider::handle:horizontal { width: 15px; margin: -5px 0; background: #e9edf4; border-radius: 7px; }
-            QProgressBar { background: #2a2e38; border: none; height: 7px; border-radius: 3px; }
-            QProgressBar::chunk { background: #53b8ff; border-radius: 3px; }
-            QSplitter::handle:vertical { background: #303540; height: 6px; margin: 2px 0; }
-            QSplitter::handle:vertical:hover { background: #53b8ff; }
-            """
-        )
+        self.setStyleSheet(APP_STYLE)
 
     @staticmethod
     def _panel() -> QFrame:
@@ -481,9 +472,7 @@ class AutoMosaicWindow(QMainWindow):
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("section")
-        return label
+        return section_label(text)
 
     @staticmethod
     def _button(text: str, callback) -> QPushButton:
@@ -1234,7 +1223,11 @@ class AutoMosaicWindow(QMainWindow):
 
 def run() -> None:
     app = QApplication(sys.argv)
-    window = AutoMosaicWindow()
+    if "--video" in sys.argv and "--smoke-test" not in sys.argv:
+        from auto_mosaic.video_ui import VideoMosaicWindow
+        window = VideoMosaicWindow()
+    else:
+        window = AutoMosaicWindow()
     smoke_test = "--smoke-test" in sys.argv
     if not smoke_test:
         window.show()

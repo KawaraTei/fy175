@@ -9,11 +9,7 @@ from auto_mosaic.detector import YoloOnnxDetector
 from auto_mosaic.domain import Detection, ImageMode, ProcessingResult, ProcessingSettings
 from auto_mosaic.image_ops import (
     apply_effect,
-    bounded_mask,
-    box_mask,
-    center_anchored_component,
     load_image_bgr,
-    refine_mask,
     save_image_bgr,
 )
 from auto_mosaic.model_catalog import (
@@ -22,6 +18,7 @@ from auto_mosaic.model_catalog import (
     detector_for,
 )
 from auto_mosaic.segmenter import Sam2OnnxSegmenter
+from auto_mosaic.mask_selection import select_detection_mask
 
 
 BELOW_THRESHOLD_PREVIEW_LIMIT = 5
@@ -61,32 +58,11 @@ class MosaicPipeline:
                 segmenter = self._get_segmenter()
                 embedding = segmenter.encode(image)
                 for detection in detections:
-                    box_area = max(
-                        1,
-                        (detection.box[2] - detection.box[0])
-                        * (detection.box[3] - detection.box[1]),
+                    candidate, fallback = select_detection_mask(
+                        segmenter.mask_candidates_from_box(embedding, detection.box),
+                        image.shape[:2], detection.box, settings.mask_expansion,
                     )
-                    minimum_area = max(16, int(box_area * 0.04))
-                    maximum_area = int(box_area * 1.2)
-                    candidate = None
-                    best_score = float("-inf")
-                    for raw_mask, score in segmenter.mask_candidates_from_box(
-                        embedding, detection.box
-                    ):
-                        anchored = center_anchored_component(
-                            bounded_mask(raw_mask, detection.box), detection.box
-                        )
-                        area = int(anchored.sum())
-                        if minimum_area <= area <= maximum_area and score > best_score:
-                            candidate = anchored
-                            best_score = score
-
-                    if candidate is None:
-                        candidate = box_mask(image.shape[:2], detection.box)
-                        fallback_count += 1
-                    else:
-                        candidate = refine_mask(candidate, settings.mask_expansion)
-                        candidate = bounded_mask(candidate, detection.box)
+                    fallback_count += int(fallback)
                     combined_mask |= candidate
 
             effected = apply_effect(

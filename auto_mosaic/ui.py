@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -35,7 +36,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSlider,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -354,7 +357,6 @@ class AutoMosaicWindow(QMainWindow):
         body_layout.addWidget(center, 0, 1)
 
         right = self._panel()
-        right.setFixedWidth(285)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(14, 12, 14, 12)
         right_layout.setSpacing(7)
@@ -387,6 +389,50 @@ class AutoMosaicWindow(QMainWindow):
             lambda value: self.threshold_value.setText(f"{value / 100:.2f}")
         )
         right_layout.addWidget(self.threshold_slider)
+        right_layout.addSpacing(8)
+
+        mask_threshold_row = QHBoxLayout()
+        mask_threshold_label = self._section_label("マスク閾値")
+        mask_threshold_row.addWidget(mask_threshold_label)
+        mask_threshold_row.addStretch(1)
+        self.mask_threshold_spin = QDoubleSpinBox()
+        self.mask_threshold_spin.setRange(-10.0, 10.0)
+        self.mask_threshold_spin.setDecimals(1)
+        self.mask_threshold_spin.setSingleStep(0.5)
+        self.mask_threshold_spin.setValue(ProcessingSettings.mask_threshold)
+        self.mask_threshold_spin.setKeyboardTracking(False)
+        self.mask_threshold_spin.setAccessibleName("マスク閾値")
+        self.mask_threshold_spin.setToolTip(
+            "低いほど広く、高いほど狭く判定します。\n"
+            f"初期値: {ProcessingSettings.mask_threshold:.1f}。変更後は「この画像を再解析」。\n"
+            "矩形補完になった対象には効きません。"
+        )
+        mask_threshold_label.setBuddy(self.mask_threshold_spin)
+        mask_threshold_row.addWidget(self.mask_threshold_spin)
+        right_layout.addLayout(mask_threshold_row)
+
+        mask_expansion_row = QHBoxLayout()
+        mask_expansion_label = QLabel("マスク拡張")
+        mask_expansion_row.addWidget(mask_expansion_label)
+        mask_expansion_row.addStretch(1)
+        self.mask_expansion_spin = QSpinBox()
+        self.mask_expansion_spin.setRange(0, 20)
+        self.mask_expansion_spin.setSuffix(" px")
+        self.mask_expansion_spin.setValue(ProcessingSettings.mask_expansion)
+        self.mask_expansion_spin.setKeyboardTracking(False)
+        self.mask_expansion_spin.setAccessibleName("マスク拡張")
+        self.mask_expansion_spin.setToolTip(
+            "判定した輪郭の周囲を、元画像のピクセル数で広げます。\n"
+            f"初期値: {ProcessingSettings.mask_expansion} px。巻き込みが多い場合は小さくします。\n"
+            "変更後は「この画像を再解析」。矩形補完には適用されません。"
+        )
+        mask_expansion_label.setBuddy(self.mask_expansion_spin)
+        mask_expansion_row.addWidget(self.mask_expansion_spin)
+        right_layout.addLayout(mask_expansion_row)
+        mask_hint = QLabel("閾値：低いほど広く、高いほど狭く\n変更後は「この画像を再解析」")
+        mask_hint.setObjectName("muted")
+        mask_hint.setWordWrap(True)
+        right_layout.addWidget(mask_hint)
         right_layout.addSpacing(8)
 
         right_layout.addWidget(self._section_label("処理方法"))
@@ -429,20 +475,37 @@ class AutoMosaicWindow(QMainWindow):
         right_layout.addWidget(self.suffix_edit)
         right_layout.addStretch(1)
 
+        settings_scroll = QScrollArea()
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        settings_scroll.setWidget(right)
+        settings_panel = self._panel()
+        settings_panel.setFixedWidth(285)
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(0)
+        settings_layout.addWidget(settings_scroll, 1)
+        actions = QWidget()
+        actions_layout = QVBoxLayout(actions)
+        actions_layout.setContentsMargins(14, 8, 14, 12)
+        actions_layout.setSpacing(7)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
-        right_layout.addWidget(self.progress)
+        actions_layout.addWidget(self.progress)
         self.remove_after_process_check = QCheckBox("処理後にリストから除去")
-        right_layout.addWidget(self.remove_after_process_check)
+        actions_layout.addWidget(self.remove_after_process_check)
         self.process_current_button = self._button("表示中の1枚を処理して保存", self._process_current)
         self.process_current_button.setMinimumHeight(36)
-        right_layout.addWidget(self.process_current_button)
+        actions_layout.addWidget(self.process_current_button)
         self.process_button = self._button("すべて処理して保存", self._process_all)
         self.process_button.setMinimumHeight(42)
-        right_layout.addWidget(self.process_button)
-        body_layout.addWidget(right, 0, 2)
+        actions_layout.addWidget(self.process_button)
+        settings_layout.addWidget(actions)
+        body_layout.addWidget(settings_panel, 0, 2)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
@@ -457,6 +520,7 @@ class AutoMosaicWindow(QMainWindow):
             QPushButton { background: #356b92; color: white; border: none; border-radius: 3px; padding: 7px 12px; }
             QPushButton:hover { background: #4f89b2; }
             QPushButton:disabled { background: #3a3d45; color: #858993; }
+            QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
             QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
             QListWidget::item { padding: 5px; }
             QListWidget::item:selected { background: #356b92; color: white; }
@@ -735,6 +799,8 @@ class AutoMosaicWindow(QMainWindow):
         self.penis_check.setEnabled(not self.mask_edit_active and not self.busy)
         self.vagina_check.setEnabled(not self.mask_edit_active and not self.busy)
         self.threshold_slider.setEnabled(not self.mask_edit_active and not self.busy)
+        self.mask_threshold_spin.setEnabled(not self.mask_edit_active and not self.busy)
+        self.mask_expansion_spin.setEnabled(not self.mask_edit_active and not self.busy)
         self.analyze_button.setEnabled(not self.mask_edit_active and not self.busy)
         self.process_current_button.setEnabled(not self.busy)
         self.process_button.setEnabled(not self.mask_edit_active and not self.busy)
@@ -809,6 +875,8 @@ class AutoMosaicWindow(QMainWindow):
             confidence_threshold=self.threshold_slider.value() / 100,
             effect=EffectType.MOSAIC if self.effect_combo.currentText() == "モザイク" else EffectType.BLUR,
             effect_size=self.effect_size_slider.value(),
+            mask_threshold=self.mask_threshold_spin.value(),
+            mask_expansion=self.mask_expansion_spin.value(),
         )
 
     def _analyze_current(self) -> None:

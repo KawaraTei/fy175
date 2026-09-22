@@ -71,7 +71,7 @@ class MosaicPipeline:
                     candidate = None
                     best_score = float("-inf")
                     for raw_mask, score in segmenter.mask_candidates_from_box(
-                        embedding, detection.box
+                        embedding, detection.box, settings.mask_threshold
                     ):
                         anchored = center_anchored_component(
                             bounded_mask(raw_mask, detection.box), detection.box

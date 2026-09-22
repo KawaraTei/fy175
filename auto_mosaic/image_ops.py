@@ -9,6 +9,11 @@ from PIL import Image, ImageOps
 from auto_mosaic.domain import Detection, EffectType
 
 
+# Preserve the closing kernel used with the original 3 px expansion, independently
+# of the user-selected dilation radius.
+MASK_CONTOUR_CLOSE_SIZE = 7
+
+
 def load_image_bgr(path: Path) -> np.ndarray:
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
@@ -87,10 +92,13 @@ def paint_mask_stroke(
 
 def refine_mask(mask: np.ndarray, expansion: int) -> np.ndarray:
     binary = mask.astype(np.uint8) * 255
+    closing_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (MASK_CONTOUR_CLOSE_SIZE, MASK_CONTOUR_CLOSE_SIZE)
+    )
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, closing_kernel)
     if expansion > 0:
         size = expansion * 2 + 1
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         binary = cv2.dilate(binary, kernel, iterations=1)
     return binary > 0
 

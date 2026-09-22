@@ -86,26 +86,31 @@ class _FakeSegmenter:
     def encode(self, _image):
         return object()
 
-    def mask_candidates_from_box(self, _embedding, _box):
+    def mask_candidates_from_box(self, _embedding, _box, mask_threshold):
+        self.mask_threshold = mask_threshold
         return self.candidates
 
 
-def _analyze_with_candidates(candidates):
+def _analyze_with_candidates(candidates, mask_threshold=0.0):
     with TemporaryDirectory() as temporary:
         source = Path(temporary) / "source.png"
         Image.new("RGB", (64, 64), (120, 100, 80)).save(source)
         pipeline = MosaicPipeline(Path("models"))
         pipeline._get_detector = lambda _mode: _FakeDetector()  # type: ignore[method-assign]
-        pipeline._get_segmenter = lambda: _FakeSegmenter(candidates)  # type: ignore[method-assign]
-        return pipeline.analyze(
+        segmenter = _FakeSegmenter(candidates)
+        pipeline._get_segmenter = lambda: segmenter  # type: ignore[method-assign]
+        result = pipeline.analyze(
             source,
             ProcessingSettings(
                 mode=ImageMode.PHOTO,
                 targets=frozenset({"penis"}),
                 confidence_threshold=0.25,
                 mask_expansion=0,
+                mask_threshold=mask_threshold,
             ),
         )
+        assert segmenter.mask_threshold == mask_threshold
+        return result
 
 
 def test_analyze_prefers_centered_mask_over_higher_scored_unrelated_mask() -> None:
@@ -113,7 +118,7 @@ def test_analyze_prefers_centered_mask_over_higher_scored_unrelated_mask() -> No
     unrelated[21:27, 21:27] = True
     centered = np.zeros((64, 64), dtype=bool)
     centered[28:34, 28:34] = True
-    result = _analyze_with_candidates([(unrelated, 0.99), (centered, 0.5)])
+    result = _analyze_with_candidates([(unrelated, 0.99), (centered, 0.5)], 1.5)
     assert result.mask[30, 30]
     assert not result.mask[23, 23]
     assert result.used_box_fallbacks == 0

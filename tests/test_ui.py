@@ -10,7 +10,7 @@ from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from auto_mosaic.domain import Detection, ProcessingResult
+from auto_mosaic.domain import Detection, ProcessingResult, ProcessingSettings
 from auto_mosaic.image_ops import load_image_bgr
 from auto_mosaic.ui import AutoMosaicWindow
 
@@ -28,6 +28,76 @@ def _send_wheel(widget, position: QPointF, delta: int) -> None:
         False,
     )
     QApplication.sendEvent(widget, event)
+
+
+def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    window.show()
+    app.processEvents()
+    received = []
+
+    def fake_analyze(path, settings):
+        received.append(settings)
+        image = load_image_bgr(path)
+        return ProcessingResult(path, image, np.zeros(image.shape[:2], dtype=bool))
+
+    def wait_for_result():
+        deadline = monotonic() + 3.0
+        while monotonic() < deadline:
+            app.processEvents()
+            window._poll_events()
+            if not window.busy and window.current_result is not None:
+                return
+            sleep(0.01)
+        raise AssertionError("analysis or saving did not complete")
+
+    window.pipeline.analyze = fake_analyze  # type: ignore[method-assign]
+    try:
+        assert window.mask_threshold_spin.value() == ProcessingSettings.mask_threshold
+        assert window.mask_expansion_spin.value() == ProcessingSettings.mask_expansion
+        with TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            source = folder / "sample.png"
+            Image.new("RGB", (64, 64), (100, 120, 140)).save(source)
+            window.output_edit.setText(str(folder / "output"))
+            window._add_image_paths([source])
+            wait_for_result()
+            original_result = window.current_result
+            QTest.keyClick(window.mask_threshold_spin, Qt.Key.Key_Up)
+            assert window.mask_threshold_spin.value() == 0.5
+            window.mask_threshold_spin.setValue(1.5)
+            window.mask_expansion_spin.setValue(0)
+            assert window.current_result is original_result
+            assert len(received) == 1
+            QTest.mouseClick(window.analyze_button, Qt.MouseButton.LeftButton)
+            assert not window.mask_threshold_spin.isEnabled()
+            assert not window.mask_expansion_spin.isEnabled()
+            wait_for_result()
+            assert received[-1].mask_threshold == 1.5
+            assert received[-1].mask_expansion == 0
+            assert received[-1].confidence_threshold == 0.25
+            window.preview_mode_combo.setCurrentText("検出範囲")
+            QTest.mouseClick(window.mask_edit_button, Qt.MouseButton.LeftButton)
+            assert window.mask_edit_active
+            assert not window.mask_threshold_spin.isEnabled()
+            assert not window.mask_expansion_spin.isEnabled()
+            window._end_mask_edit(refresh_preview=True)
+            assert window.mask_threshold_spin.isEnabled()
+            assert window.mask_expansion_spin.isEnabled()
+            with patch("auto_mosaic.ui.QMessageBox.information"):
+                QTest.mouseClick(window.process_current_button, Qt.MouseButton.LeftButton)
+                wait_for_result()
+                assert (folder / "output" / "sample_mosaic.png").exists()
+                QTest.mouseClick(window.process_button, Qt.MouseButton.LeftButton)
+                wait_for_result()
+                assert (folder / "output" / "sample_mosaic_2.png").exists()
+            assert len(received) == 4
+            assert all(settings.mask_threshold == 1.5 for settings in received[1:])
+            assert all(settings.mask_expansion == 0 for settings in received[1:])
+    finally:
+        window._end_mask_edit(refresh_preview=False)
+        window.close()
 
 
 def test_preview_wheel_zoom_uses_cursor_or_image_center_anchor() -> None:

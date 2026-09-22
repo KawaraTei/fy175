@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from auto_mosaic.domain import ProcessingSettings
+
 
 class Sam2OnnxSegmenter:
     """SAM2 ONNX box-prompt segmentation with one cached embedding per image."""
@@ -47,14 +49,16 @@ class Sam2OnnxSegmenter:
         self,
         embedding: tuple[list[np.ndarray], tuple[int, int]],
         box: tuple[int, int, int, int],
+        mask_threshold: float = ProcessingSettings.mask_threshold,
     ) -> np.ndarray:
-        candidates = self.mask_candidates_from_box(embedding, box)
+        candidates = self.mask_candidates_from_box(embedding, box, mask_threshold)
         return max(candidates, key=lambda item: item[1])[0]
 
     def mask_candidates_from_box(
         self,
         embedding: tuple[list[np.ndarray], tuple[int, int]],
         box: tuple[int, int, int, int],
+        mask_threshold: float = ProcessingSettings.mask_threshold,
     ) -> list[tuple[np.ndarray, float]]:
         encoder_outputs, original_size = embedding
         original_height, original_width = original_size
@@ -95,5 +99,5 @@ class Sam2OnnxSegmenter:
                 (original_width, original_height),
                 interpolation=cv2.INTER_LINEAR,
             )
-            candidates.append((resized_mask > 0.0, float(score)))
+            candidates.append((resized_mask > mask_threshold, float(score)))
         return candidates

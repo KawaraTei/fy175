@@ -36,6 +36,29 @@ def test_refine_mask_expands_mask() -> None:
     assert int(refined.sum()) > 1
 
 
+def test_refine_mask_keeps_contour_correction_with_zero_or_small_expansion() -> None:
+    mask = np.zeros((40, 40), dtype=bool)
+    mask[8:32, 8:32] = True
+    mask[8:20, 18:22] = False  # Narrow notch connected to the outside.
+    mask[25, 25] = False
+    original = mask.copy()
+
+    corrected = refine_mask(mask, 0)
+    assert corrected[15, 20]
+    assert corrected[25, 25]
+    assert not corrected[:8, :].any()
+    assert not corrected[32:, :].any()
+    assert not corrected[:, :8].any()
+    assert not corrected[:, 32:].any()
+
+    expanded = refine_mask(mask, 1)
+    assert expanded[15, 20]  # Reducing expansion must not weaken gap closing.
+    assert expanded[25, 25]
+    assert expanded[20, 7]
+    assert not expanded[20, 6]
+    assert np.array_equal(mask, original)
+
+
 def test_center_anchored_component_discards_larger_unrelated_region() -> None:
     mask = np.zeros((80, 100), dtype=bool)
     mask[5:35, 5:35] = True

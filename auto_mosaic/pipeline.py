@@ -59,7 +59,9 @@ class MosaicPipeline:
                 embedding = segmenter.encode(image)
                 for detection in detections:
                     candidate, fallback = select_detection_mask(
-                        segmenter.mask_candidates_from_box(embedding, detection.box),
+                        segmenter.mask_candidates_from_box(
+                            embedding, detection.box, settings.mask_threshold
+                        ),
                         image.shape[:2], detection.box, settings.mask_expansion,
                     )
                     fallback_count += int(fallback)

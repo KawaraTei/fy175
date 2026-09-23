@@ -33,6 +33,7 @@ class ProcessingSettings:
     effect: EffectType = EffectType.MOSAIC
     effect_size: int = 16
     mask_expansion: int = 3
+    mask_threshold: float = 0.0
 
 
 @dataclass

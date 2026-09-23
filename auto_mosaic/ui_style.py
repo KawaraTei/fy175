@@ -13,6 +13,7 @@ APP_STYLE = """
     QPushButton { background: #356b92; color: white; border: none; border-radius: 3px; padding: 7px 12px; }
     QPushButton:hover { background: #4f89b2; }
     QPushButton:disabled { background: #3a3d45; color: #858993; }
+    QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
     QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
     QListWidget::item { padding: 5px; }
     QListWidget::item:selected { background: #356b92; color: white; }

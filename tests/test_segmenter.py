@@ -15,7 +15,7 @@ class _FakeDecoder:
         return [masks, scores]
 
 
-def test_box_prompt_includes_positive_center_point() -> None:
+def _segmenter_and_embedding():
     segmenter = Sam2OnnxSegmenter.__new__(Sam2OnnxSegmenter)
     segmenter.input_width = 8
     segmenter.input_height = 8
@@ -36,7 +36,12 @@ def test_box_prompt_includes_positive_center_point() -> None:
         np.zeros((1, 1, 1, 1), dtype=np.float32),
     ]
 
-    candidates = segmenter.mask_candidates_from_box((encoder_outputs, (8, 8)), (2, 2, 6, 6))
+    return segmenter, (encoder_outputs, (8, 8))
+
+
+def test_box_prompt_includes_positive_center_point() -> None:
+    segmenter, embedding = _segmenter_and_embedding()
+    candidates = segmenter.mask_candidates_from_box(embedding, (2, 2, 6, 6))
 
     feed = segmenter.decoder.feed
     assert feed is not None
@@ -44,3 +49,17 @@ def test_box_prompt_includes_positive_center_point() -> None:
     assert feed["point_coords"].tolist() == [[[4.0, 4.0], [2.0, 2.0], [6.0, 6.0]]]
     assert len(candidates) == 3
     assert candidates[1][1] > candidates[0][1]
+
+
+def test_mask_threshold_changes_pixel_inclusion_without_changing_scores() -> None:
+    segmenter, embedding = _segmenter_and_embedding()
+    box = (2, 2, 6, 6)
+    wide = segmenter.mask_candidates_from_box(embedding, box, -0.5)
+    default = segmenter.mask_candidates_from_box(embedding, box)
+    narrow = segmenter.mask_candidates_from_box(embedding, box, 1.0)
+    for index in range(3):
+        assert wide[index][0].sum() == 64
+        assert default[index][0].sum() == 9
+        assert narrow[index][0].sum() == 0
+        assert wide[index][1] == default[index][1] == narrow[index][1]
+    assert np.array_equal(segmenter.mask_from_box(embedding, box, -0.5), wide[1][0])

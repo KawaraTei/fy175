@@ -37,7 +37,8 @@ class ShapeSegmenter:
         self.calls += 1
         return image.shape[:2]
 
-    def mask_candidates_from_box(self, shape, box):
+    def mask_candidates_from_box(self, shape, box, mask_threshold):
+        self.mask_threshold = mask_threshold
         mask = np.zeros(shape, np.uint8)
         x1, y1, x2, y2 = box
         cv2.ellipse(mask, ((x1 + x2) // 2, (y1 + y2) // 2),

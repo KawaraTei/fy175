@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -39,11 +40,14 @@ class VideoTests(unittest.TestCase):
                     return []
                 return [Detection("penis", .9, (20, 20, 60, 60))]
         detector, segmenter = Detector(), ShapeSegmenter()
-        engine = VideoFrameAnalyzer(Path("models"), settings(5), detector=detector, segmenter=segmenter)
+        config = settings(5)
+        config = replace(config, processing=replace(config.processing, mask_threshold=1.5))
+        engine = VideoFrameAnalyzer(Path("models"), config, detector=detector, segmenter=segmenter)
         image = np.zeros((100, 100, 3), np.uint8)
         summaries = [engine.analyze(image, Event())[2] for _ in range(6)]
         self.assertEqual(detector.calls, 6)
         self.assertEqual(segmenter.calls, 2)
+        self.assertEqual(segmenter.mask_threshold, 1.5)
         self.assertEqual([f.count for f in summaries], [1, 1, 1, 0, 1, 1])
         engine.analyze(np.full_like(image, 255), Event())
         self.assertEqual(segmenter.calls, 3, "scene cut must refresh the contour")

@@ -212,7 +212,7 @@ class VideoFrameAnalyzer:
                     self.encoder_calls += 1
                 check_cancel(cancel)
                 mask, fallback = select_detection_mask(
-                    self.segmenter.mask_candidates_from_box(embedding, detection.box),
+                    self.segmenter.mask_candidates_from_box(embedding, detection.box, settings.mask_threshold),
                     image.shape[:2], detection.box, settings.mask_expansion)
                 age = 0
             combined |= mask

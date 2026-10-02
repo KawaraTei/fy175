@@ -83,9 +83,29 @@ class FrameCache:
         self.path = self.directory / "frames.sqlite"
         with closing(sqlite3.connect(self.path)) as connection, connection:
             connection.execute("CREATE TABLE frames (frame INTEGER PRIMARY KEY, mask BLOB, preview BLOB, detections TEXT)")
+            connection.execute("CREATE TABLE mask_edits (frame INTEGER PRIMARY KEY, mask BLOB NOT NULL, removed BLOB NOT NULL, kind TEXT NOT NULL)")
+            connection.execute("CREATE TABLE mask_undo (frame INTEGER PRIMARY KEY, mask BLOB, removed BLOB, kind TEXT)")
 
     def close(self):
         self.temporary.cleanup()
+
+    def edit_state(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            edits = dict(connection.execute("SELECT frame, kind FROM mask_edits ORDER BY frame"))
+            can_undo = connection.execute("SELECT 1 FROM mask_undo LIMIT 1").fetchone() is not None
+        return edits, can_undo
+
+    @staticmethod
+    def mask_row(connection, index):
+        return connection.execute("""SELECT COALESCE(e.mask, f.mask) FROM frames f
+            LEFT JOIN mask_edits e ON e.frame=f.frame WHERE f.frame=?""", (index,)).fetchone()
+
+    def full_mask(self, index, info):
+        with closing(sqlite3.connect(self.path)) as connection:
+            row = self.mask_row(connection, index)
+        if row is None:
+            raise ValueError("このフレームの解析結果がありません。")
+        return self.decode_mask(row[0], (info.height, info.width))
 
     @staticmethod
     def append(connection, index, image, mask, detections):
@@ -109,7 +129,8 @@ class FrameCache:
 
     def preview(self, index: int, info: VideoInfo):
         with closing(sqlite3.connect(self.path)) as connection:
-            row = connection.execute("SELECT mask, preview, detections FROM frames WHERE frame=?", (index,)).fetchone()
+            row = connection.execute("""SELECT COALESCE(e.mask, f.mask), f.preview, f.detections FROM frames f
+                LEFT JOIN mask_edits e ON e.frame=f.frame WHERE f.frame=?""", (index,)).fetchone()
         if row is None:
             raise RuntimeError("このフレームの解析結果がありません。")
         image = cv2.imdecode(np.frombuffer(row[1], np.uint8), cv2.IMREAD_COLOR)
@@ -271,7 +292,7 @@ def export_video(analysis: VideoAnalysis, destination: Path, effect: EffectType,
             with media_process(encoder_arguments(info, silent), cancel, input_pipe=True) as encoder:
                 count = 0
                 for index, image in enumerate(decode_frames(info, cancel)):
-                    row = connection.execute("SELECT mask FROM frames WHERE frame=?", (index,)).fetchone()
+                    row = FrameCache.mask_row(connection, index)
                     if row is None:
                         raise RuntimeError("動画と解析結果のフレーム数が一致しません。再解析してください。")
                     mask = FrameCache.decode_mask(row[0], image.shape[:2])

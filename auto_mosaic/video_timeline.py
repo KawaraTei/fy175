@@ -62,6 +62,7 @@ class MaskCountTimeline(QWidget):
         self.current = 0
         self.window_seconds = 0
         self.start = 0
+        self.edits = {}
         self.setMinimumHeight(140)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -75,6 +76,10 @@ class MaskCountTimeline(QWidget):
     @property
     def span(self):
         return max(1, min(len(self.counts), round(self.window_seconds * self.fps))) if self.window_seconds else max(1, len(self.counts))
+
+    def set_edits(self, edits):
+        self.edits = dict(edits)
+        self.update()
 
     def set_window_seconds(self, seconds: int):
         self.window_seconds = seconds
@@ -107,7 +112,8 @@ class MaskCountTimeline(QWidget):
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.frame_requested.emit(frame)
         QToolTip.showText(event.globalPosition().toPoint(),
-                         f"{time_text(frame / self.fps)}  マスク {self.counts[frame]}件  / フレーム {frame + 1}", self)
+                         f"{time_text(frame / self.fps)}  検出マスク {self.counts[frame]}件  / フレーム {frame + 1}"
+                         + (" / 手動編集" if self.edits.get(frame) == "manual" else " / 自動補完" if frame in self.edits else ""), self)
 
     def keyPressEvent(self, event):
         step = -1 if event.key() == Qt.Key.Key_Left else 1 if event.key() == Qt.Key.Key_Right else 0
@@ -158,6 +164,13 @@ class MaskCountTimeline(QWidget):
             label = time_text((self.start + fraction * self.span) / self.fps)
             box = QRectF(x if fraction == 0 else x - (100 if fraction == 1 else 50), rect.bottom() + 6, 100, 20)
             painter.drawText(box, alignment, label)
+        # Keep original detection counts intact; edits occupy a separate strip.
+        for frame, kind in self.edits.items():
+            if self.start <= frame < self.start + self.span:
+                x = rect.left() + (frame - self.start) / self.span * rect.width()
+                painter.fillRect(QRectF(x, rect.top() - 12, max(2, rect.width() / self.span), 5), QColor("#63d6a3"))
+                if kind == "manual":
+                    painter.fillRect(QRectF(x, rect.top() - 14, 3, 9), QColor("#d4ffe9"))
         x = rect.left() + (self.current - self.start + 0.5) / self.span * rect.width()
         painter.setPen(QPen(QColor("#ffffff"), 2))
         painter.drawLine(QPointF(x, rect.top() - 5), QPointF(x, rect.bottom()))

@@ -20,3 +20,5 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
 & '.venv\Scripts\python.exe' -m tests.smoke_models
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& '.venv\Scripts\python.exe' -m unittest tests.test_agent_api -v
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

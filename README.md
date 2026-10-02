@@ -52,6 +52,14 @@ python -m venv .venv
 `.\.venv\Scripts\python.exe scripts\download_models.py`をもう一度実行してください。
 モデルの出典とライセンスは`MODEL_LICENSES.md`に記載しています。
 
+### エージェントから操作する場合
+
+`.\.venv\Scripts\python.exe -m auto_mosaic.app --agent-api`（配布版は
+`FY175AutoMosaic.exe --agent-api`）で、画像モード用のローカルHTTP APIを有効にします。
+`http://127.0.0.1:8765/` にGETすると、操作一覧・引数・設定範囲・操作手順を取得できます。
+プレビュー取得、パラメータ調整、マスクの追加・削除、保存まで同じUIの状態で操作できます。
+外部サービスやMCP登録は不要です。詳細と同梱クライアントは [AGENT_INTERFACE.md](AGENT_INTERFACE.md) を参照してください。
+
 
 ## 基本的な使い方
 

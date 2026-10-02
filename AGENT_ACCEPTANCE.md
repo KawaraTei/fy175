@@ -76,3 +76,29 @@ APIバージョン2で以下を変更した。上記の2026-10-02の検証は当
 証拠は `.codex-qa/agent-feedback/` の `powershell51.json`、`check-powershell51.ps1`、
 `capture.py`、`detection-before.png`、`overlay-before.png`、`overlay-removed.png`、`overlay-dilated.png`、`visual-state.json`。
 改修版のGrokBotによる再検証、配布EXEの再ビルド・実行、実モデルの検出精度は未確認。
+
+## 2026-10-03: 保存経路・PID・番号指定プレビューの追加
+
+- 個別／一括保存ジョブに `mask_source`、`used_edited_mask`、`detection_rerun` を追加。
+  一括保存は `saved_images[]` で元画像・保存先・処理経路を対応付ける。
+- `GET /` に実際のアプリPIDと親PID、終了方法を返す。HTTP/1.1の持続接続に対応。
+  chunkedリクエスト本文には非対応で、Content-Lengthを使用する仕様を自己説明にも明記。
+- `GET /preview/metadata` に座標変換情報をJSON本文で返す。
+- `GET /preview?image_index=N` に未選択画像を指定できる。選択、編集中マスク、undo履歴、
+  UI表示を保持する。初回の処理済みプレビューは202の解析ジョブを返し、完了後に同じURLを取得する。
+  元画像ビューは解析不要。直近1枚の解析結果をキャッシュし、設定または元ファイル変更で無効化する。
+
+検証:
+
+- 関連するAPI統合テスト7件を通過。編集マスク保存／再検出保存／一括保存の処理経路、
+  同一ソケット上のHTTP/1.1応答2回、番号指定プレビュー、JSONとPNGヘッダーの座標一致、
+  解析キャッシュ、選択・下書き・undo保持、番号指定解析の失敗通知を確認。
+- 実アプリを起動し、PowerShell 5.1.26100.9444でAPIの `pid=36336` が
+  Get-NetTCPConnectionの待受所有PIDと一致することを確認。親PIDは19988。
+  app.shutdownに正常応答し、起動セッションが終了コード0で終了。
+- design-qa手順で、未選択画像のマスク範囲PNGと取得後のQt画面を実物確認。
+  合成画像・決定的な検出を使用し、元の画像が選択されたまま、手動追加マスクと編集状態が残る。
+  対象範囲に未解決の表示問題なし。証拠は `.codex-qa/agent-additions/` の
+  `live.json`、`indexed-overlay.png`、`selected-before.png`、`selected-after.png`、`metadata.json`。
+
+今回の追加機能のGrokBotによる再検証と配布EXEの実行は未実施。

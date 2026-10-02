@@ -1,5 +1,6 @@
 """Focused HTTP-to-Qt integration checks, using deterministic local media."""
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
 import json
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -113,6 +114,9 @@ class AgentApiTests(unittest.TestCase):
         changed, _ = self.decoded("/preview?view=result")
         self.assertFalse(np.array_equal(full_preview, changed))
         job = self.call("image.save")
+        self.assertEqual(job["result"]["mask_source"], "edited")
+        self.assertTrue(job["result"]["used_edited_mask"])
+        self.assertFalse(job["result"]["detection_rerun"])
         exported = load_image_bgr(Path(job["result"]["outputs"][0]))
         self.assertTrue(np.array_equal(exported, changed))
         source = load_image_bgr(self.image)
@@ -120,6 +124,79 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(self.window.agent_notice is not None, True)
         snapshot, _ = self.decoded("/snapshot")
         self.assertGreater(snapshot.shape[1], 1000)
+
+    def test_save_provenance_and_http11(self):
+        def persistent_requests():
+            connection = HTTPConnection("127.0.0.1", self.server.http.server_port, timeout=10)
+            try:
+                connection.request("GET", "/")
+                first = connection.getresponse()
+                description = json.loads(first.read())
+                socket = connection.sock
+                connection.request("GET", "/state")
+                second = connection.getresponse()
+                state = json.loads(second.read())
+                return first.version, second.version, description, state, socket is connection.sock
+            finally:
+                connection.close()
+        future = self.executor.submit(persistent_requests)
+        deadline = time.monotonic() + 15
+        while not future.done() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(.005)
+        versions = future.result(timeout=1)
+        self.assertEqual(versions[:2], (11, 11))
+        self.assertEqual(versions[2]["pid"], os.getpid())
+        self.assertTrue(versions[4], "Connection should remain persistent")
+        self.call("settings.update", values={"output_dir": str(self.root / "out")})
+        self.call("images.add", paths=[str(self.image)])
+        job = self.call("image.save")
+        self.assertEqual(job["result"]["mask_source"], "reanalyzed")
+        self.assertTrue(job["result"]["detection_rerun"])
+        self.assertFalse(job["result"]["used_edited_mask"])
+        batch = self.call("images.save_all")["result"]
+        self.assertEqual(batch["saved_images"][0]["path"], str(self.image))
+        self.assertEqual(batch["saved_images"][0]["mask_source"], "reanalyzed")
+
+    def test_indexed_preview_preserves_draft_and_json_transform(self):
+        second = self.root / "second.png"
+        source = np.full((100, 160, 3), (50, 110, 190), np.uint8)
+        save_image_bgr(second, source)
+        self.call("images.add", paths=[str(self.image), str(second)])
+        self.call("mask.edit", shape="rectangle", points=[[5, 5], [15, 15]])
+        before, _ = self.http("/state")
+        mask = self.window.edited_mask.copy()
+        original, _ = self.decoded("/preview?image_index=1&view=original")
+        self.assertTrue(np.array_equal(original, source))
+        endpoint = "/preview?image_index=1&view=mask_overlay&crop=20,10,100,80&max_size=64"
+        with patch.object(self.window.pipeline, "analyze", wraps=self.window.pipeline.analyze) as analyze:
+            started, _ = self.http(endpoint)
+            self.assertEqual(started["retry_url"], endpoint)
+            job = started["job"]
+            deadline = time.monotonic() + 15
+            while job["status"] == "running" and time.monotonic() < deadline:
+                job, _ = self.http("/jobs/" + job["id"])
+            self.assertEqual(job["status"], "succeeded", job)
+            preview, headers = self.decoded(endpoint)
+            metadata, _ = self.http(endpoint.replace("/preview?", "/preview/metadata?"))
+            self.assertEqual(metadata, json.loads(headers["X-Agent-Metadata"]))
+            self.assertEqual(metadata["source_crop"], [20, 10, 100, 80])
+            self.assertEqual(metadata["image_index"], 1)
+            self.assertEqual(preview.shape[:2], (51, 64))
+            self.assertEqual(analyze.call_count, 1)
+        after, _ = self.http("/state")
+        for key in ("selected_index", "undo_depth", "editing", "preview_view"):
+            self.assertEqual(after["image"][key], before["image"][key])
+        self.assertTrue(np.array_equal(self.window.edited_mask, mask))
+        self.call("mask.undo")
+        with patch.object(self.window.pipeline, "analyze", side_effect=RuntimeError("indexed failure")):
+            self.call("settings.update", values={"effect_size": 32})
+            started, _ = self.http(endpoint)
+            job = started["job"]
+            while job["status"] == "running":
+                job, _ = self.http("/jobs/" + job["id"])
+            self.assertEqual(job["status"], "failed")
+            self.assertIn("indexed failure", job["error"])
 
     def test_invalid_requests_and_async_errors_are_data(self):
         before = self.window.effect_size_slider.value()

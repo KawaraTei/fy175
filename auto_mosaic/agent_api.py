@@ -1,7 +1,7 @@
 """Self-describing loopback HTTP API over the application's actual Qt windows.
 
-No web framework or parallel processing session: every command runs on the Qt
-thread, and long operations use the existing UI workers and event queues.
+No web framework or parallel processing session: commands run on the Qt thread;
+workers share the UI pipeline, with one read-only indexed-preview cache.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import threading
@@ -21,7 +22,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QBuffer, QIODevice, QObject, QTimer, Signal
 
-from auto_mosaic.image_ops import apply_effect, load_image_bgr, paint_mask_stroke
+from auto_mosaic.image_ops import apply_effect, load_image_bgr, paint_mask_stroke, visualize_detection
 from auto_mosaic.ui import MAX_IMAGES
 from auto_mosaic.detector import BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE
 from auto_mosaic.domain import PREVIEW_VIEWS
@@ -100,6 +101,9 @@ class AgentController:
         self.undo_history = deque()
         self.edit_detection_masks = None
         self.last_error = None
+        self.preview_events = queue.Queue()
+        self.preview_cache = None
+        self.preview_key = None
         self.shutdown = ShutdownRelay(window)
         self.shutdown.requested.connect(window.close)
         self.window.agent_notice = lambda kind, title, text: self.notifications.append(
@@ -128,10 +132,16 @@ class AgentController:
             elif event == "single_complete":
                 if payload[3] and self.edit_detection_masks is not None:
                     payload[0].detection_masks = self.edit_detection_masks
-                result = {"outputs": [str(payload[1])], **self._result_details(payload[0])}
+                result = {"outputs": [str(payload[1])], **self._result_details(payload[0]),
+                          "mask_source": "edited" if payload[3] else "reanalyzed",
+                          "used_edited_mask": bool(payload[3]), "detection_rerun": not payload[3]}
                 self._reset_history()
             elif event == "complete":
-                result = {"outputs": [str(path) for path in payload[0]]}
+                result = {"outputs": [str(path) for path in payload[0]], "mask_source": "reanalyzed",
+                          "used_edited_mask": False, "detection_rerun": True,
+                          "saved_images": [{"path": str(source), "output": str(output), "mask_source": "reanalyzed",
+                                            "used_edited_mask": False, "detection_rerun": True}
+                                           for source, output in zip(payload[1], payload[0])]}
             elif event in {"analysis_error", "error", "batch_error"}:
                 error = payload[1] if event == "analysis_error" else payload[0] if event == "batch_error" else payload
                 job.update(status="failed", error=str(error))
@@ -167,6 +177,20 @@ class AgentController:
         return response.get()
 
     def _drain(self):
+        try:
+            key, result, error = self.preview_events.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            job = self.active.pop("preview")
+            self.preview_key = None
+            if error is None:
+                self.preview_cache = (key, result)
+                job.update(status="succeeded", result=self._result_details(result))
+            else:
+                job.update(status="failed", error=str(error))
+                self.last_error = str(error)
+            job["finished_at"] = time.time()
         for _ in range(8):
             try:
                 method, path, data, response = self.requests.get_nowait()
@@ -373,7 +397,7 @@ class AgentController:
         w = self.window
         status = ("processing" if w.busy or self.active else "error" if self.last_error else "editing" if w.mask_edit_active
                   else "empty" if not w.image_paths else "awaiting_selection" if w._selected_path() is None else "ready")
-        result = {"image": {"busy": w.busy, "status": status, "status_text": w.status_label.text(), "progress": w.progress.value(),
+        result = {"image": {"busy": bool(w.busy or self.active), "status": status, "status_text": w.status_label.text(), "progress": w.progress.value(),
                   "paths": [str(p) for p in w.image_paths], "selected_index": w.file_list.currentRow(),
                   "manual_review": [w.manual_review_list.item(i).text() for i in range(w.manual_review_list.count())],
                   "manual_review_paths": [str(path) for path in w.manual_review_paths],
@@ -533,9 +557,10 @@ class AgentController:
 
     def describe(self):
         return {"name": "FY175AutoMosaic Agent API", "version": 2,
+                "pid": os.getpid(), "parent_pid": os.getppid(),
                 "supported_media": ["image"],
                 "image_list_capacity": MAX_IMAGES,
-                "transport": "HTTP on 127.0.0.1; no external dependencies or MCP registration required",
+                "transport": "HTTP/1.1 on 127.0.0.1, persistent connections and Content-Length; chunked request bodies unsupported. No external dependencies or MCP registration required",
                 "workflow": ["GET / for capabilities and current setting constraints", "POST /commands with operation and arguments",
                              "Poll GET /jobs/{id} until succeeded or failed (recommended 0.2s interval)",
                              "GET /state to inspect results", "GET /preview?workspace=image&view=detection to see coverage",
@@ -551,14 +576,25 @@ class AgentController:
                               "effects": "Effect changes preserve masks and immediately update previews.",
                               "concurrency": "One operation at a time; all mutations happen on UI thread. UI state is shared.",
                               "previews": "/mask returns full original-size mask. Use preview metadata to map coordinates.",
+                              "preview_metadata": {"source_width/source_height": "Original image dimensions after EXIF orientation",
+                                                   "width/height": "Returned PNG dimensions",
+                                                   "source_crop": "[x,y,width,height] in original pixels; actual bounds after rounding",
+                                                   "source_units_per_pixel": "[sx,sy]; original point = [crop.x + preview.x*sx, crop.y + preview.y*sy]",
+                                                   "image_index": "Zero-based image index", "view": "Requested view code",
+                                                   "mask_source": "edited, automatic, or none (unanalysed unselected original view)",
+                                                   "mask_pixels": "Full-size combined mask pixel count; null for an unanalysed, unselected original view"},
                               "detection_view": f"Colored masks/boxes are accepted detections. Gray boxes are preview-only candidates with confidence >= {BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE} and below the chosen detection threshold; at most five, no masks. A lower user detection threshold still admits accepted detections below this preview floor. mask_overlay shows original pixels with colored coverage/contours and no boxes or labels. Manual editing hides box annotations. GET /state distinguishes accepted from below-threshold candidates.",
                               "files": "Absolute local paths. Images avoid overwrites by adding a sequence suffix.",
                               "jobs": "Terminal errors and partial batch completion are returned as data; no modal completion dialogs.",
+                              "save_provenance": "Save job result.mask_source is edited or reanalyzed; used_edited_mask and detection_rerun are booleans. Batch results also include saved_images with per-image provenance.",
+                              "indexed_previews": "image_index selects a zero-based image without changing selection, draft or undo. Selected image uses current draft. Other images use current settings and a one-image analysis cache invalidated by file/settings changes. First processed preview returns HTTP 202 with job and retry_url; poll job then retry URL. Original view needs no analysis. Unselected previews do not change the UI display.",
+                              "shutdown": "POST /commands app.shutdown closes the listening process after its response. pid is the actual listening app PID; parent_pid may be a Windows launcher. Stop the app through the API rather than relying on the launcher PID.",
                               "security": "Loopback only; browser Origin requests rejected; no CORS. Local agents have same file access as app."},
                 "endpoints": {"GET /": "This self-contained reference", "GET /state": "Shared UI state, detections, settings, progress, notifications",
                               "POST /commands": {"body": {"operation": "name below", "arguments": {}}, "returns": "job (or null), state"},
                               "GET /jobs/{id}": "Job status/result/error; last 200 retained",
-                              "GET /preview": {"returns": "PNG + X-Agent-Metadata JSON header", "query": {"workspace": "image only (optional)", "view": "original|detection|mask_overlay|result (default result)", "max_size": "optional max edge 64..4096", "crop": "optional x,y,width,height in ORIGINAL pixels"}},
+                              "GET /preview": {"returns": "PNG + X-Agent-Metadata JSON header; HTTP 202 JSON job if indexed analysis is needed", "query": {"workspace": "image only (optional)", "image_index": "optional zero-based image index; default selected image", "view": "original|detection|mask_overlay|result (default result)", "max_size": "optional max edge 64..4096", "crop": "optional x,y,width,height in ORIGINAL pixels"}},
+                              "GET /preview/metadata": "Same query and HTTP 202 behavior as /preview; returns the identical coordinate metadata as a JSON body, without PNG encoding",
                               "GET /mask": "PNG binary mask, original dimensions; optional index=N selects a detection's owned mask",
                               "GET /snapshot": "Actual Qt window PNG (available during processing)"},
                 "settings_schema": {"image": self._schema("image")},
@@ -567,7 +603,28 @@ class AgentController:
                 "operations": OPERATIONS,
                 "example": {"operation": "mask.edit", "arguments": {"workspace": "image", "shape": "stroke", "action": "add", "points": [[20, 20], [40, 30]], "diameter": 16}}}
 
-    def image_response(self, path, params):
+    def _indexed_result(self, source, settings):
+        stat = source.stat()
+        key = (source, stat.st_mtime_ns, stat.st_size, settings)
+        if self.preview_cache is not None and self.preview_cache[0] == key:
+            return self.preview_cache[1], None
+        job = self.active.get("preview")
+        if job is not None:
+            require(self.preview_key == key, "Another preview is running; poll its job first", 409)
+            return None, job
+        self._idle()
+        job = self._track("preview", "image.preview")
+        self.preview_key = key
+        def work():
+            try:
+                result = self.window.pipeline.analyze(source, settings)
+                self.preview_events.put((key, result, None))
+            except Exception as error:
+                self.preview_events.put((key, None, error))
+        threading.Thread(target=work, name="agent-preview", daemon=True).start()
+        return None, job
+
+    def image_response(self, path, params, raw_path):
         workspace = params.get("workspace", ["image"])[0]
         require(workspace == "image", "Only image workspace is supported; video mode is not supported")
         w = self.window
@@ -576,10 +633,35 @@ class AgentController:
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
             require(w.grab().save(buffer, "PNG"), "Could not capture Qt window", 500)
             return 200, "image/png", bytes(buffer.data()), {}
-        self._idle()
         view = params.get("view", ["result"])[0]
         require(view in VIEWS, "Invalid preview view")
-        mask = self._mask(workspace)
+        try:
+            image_index = int(params["image_index"][0]) if "image_index" in params else w.file_list.currentRow()
+        except ValueError:
+            raise ApiError("image_index must be an integer") from None
+        require(0 <= image_index < len(w.image_paths), "Image index out of range")
+        source = w.image_paths[image_index]
+        if path != "/mask" and source != w._selected_path():
+            settings = w._settings()
+            if view == "original":
+                self._idle()
+                image = load_image_bgr(source)
+                mask = np.zeros(image.shape[:2], bool)
+            else:
+                result, job = self._indexed_result(source, settings)
+                if job is not None:
+                    return 202, "application/json", {"job": dict(job), "retry_url": raw_path}, {}
+                self._idle()
+                mask = result.mask
+                original = load_image_bgr(source)
+                image = (apply_effect(original, mask, settings.effect, settings.effect_size) if view == "result" else
+                         visualize_detection(original, mask, result.detections, result.below_threshold_detections,
+                                             show_detection_annotations=view == "detection"))
+        else:
+            self._idle()
+            mask = self._mask(workspace)
+            image = None
+        require(path != "/mask" or "image_index" not in params, "image_index is supported by /preview and /preview/metadata only")
         if path == "/mask" and "index" in params:
             try:
                 index = int(params["index"][0])
@@ -591,7 +673,7 @@ class AgentController:
         height, width = mask.shape
         if path == "/mask":
             image = mask.astype(np.uint8) * 255
-        else:
+        elif image is None:
             if workspace == "image":
                 w.preview_mode_combo.setCurrentText(VIEWS[view])
                 if view == "result":
@@ -624,18 +706,22 @@ class AgentController:
             if scale < 1:
                 image = cv2.resize(image, (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))),
                                    interpolation=cv2.INTER_NEAREST if path == "/mask" else cv2.INTER_AREA)
-        ok, encoded = cv2.imencode(".png", image)
-        require(ok, "PNG encoding failed", 500)
         metadata = {"source_width": width, "source_height": height, "width": image.shape[1], "height": image.shape[0],
                     "source_crop": [x, y, cw, ch], "source_units_per_pixel": [cw / image.shape[1], ch / image.shape[0]],
-                    "mask_pixels": int(mask.sum())}
+                    "mask_pixels": None if source != w._selected_path() and view == "original" else int(mask.sum()),
+                    "image_index": image_index, "view": view,
+                    "mask_source": "edited" if source == w._selected_path() and w.mask_edit_active else "automatic" if source == w._selected_path() or view != "original" else "none"}
+        if path == "/preview/metadata":
+            return 200, "application/json", metadata, {}
+        ok, encoded = cv2.imencode(".png", image)
+        require(ok, "PNG encoding failed", 500)
         return 200, "image/png", encoded.tobytes(), {"X-Agent-Metadata": json.dumps(metadata)}
 
     def handle(self, method, raw_path, data):
         parsed = urlsplit(raw_path)
         path, params = parsed.path, parse_qs(parsed.query)
-        if method == "GET" and path in {"/preview", "/mask", "/snapshot"}:
-            return self.image_response(path, params)
+        if method == "GET" and path in {"/preview", "/preview/metadata", "/mask", "/snapshot"}:
+            return self.image_response(path, params, raw_path)
         if method == "GET" and path == "/":
             value = self.describe()
         elif method == "GET" and path == "/state":
@@ -659,6 +745,7 @@ class AgentServer:
         controller = self.controller
 
         class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
             def log_message(self, *_args):
                 pass
 
@@ -673,27 +760,35 @@ class AgentServer:
                     # Prevent drive-by browser requests and DNS-rebinding hosts.
                     require(not self.headers.get("Origin"), "Browser-origin requests are not accepted", 403)
                     require(self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}", "Invalid Host", 403)
+                    require(not self.headers.get("Transfer-Encoding"), "Use Content-Length; chunked requests are not supported")
                     length = int(self.headers.get("Content-Length", 0))
                     require(0 <= length <= 2_000_000, "Request too large", 413)
+                    require(self.command == "POST" or length == 0, "GET requests must not include a body")
                     data = None
                     if self.command == "POST":
                         require(self.headers.get_content_type() == "application/json", "Use application/json", 415)
                         data = json.loads(self.rfile.read(length))
                     status, mime, value, headers = controller.submit(self.command, self.path, data)
                 except (ApiError, ValueError, UnicodeError) as error:
+                    self.close_connection = True
                     status, mime, value, headers = getattr(error, "status", 400), "application/json", {"error": str(error)}, {}
                 body = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8") if mime == "application/json" else value
+                shutting_down = status == 200 and isinstance(data, dict) and data.get("operation") == "app.shutdown"
+                if shutting_down:
+                    self.close_connection = True
                 self.send_response(status)
                 self.send_header("Content-Type", mime + "; charset=utf-8" if mime == "application/json" else mime)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
+                if self.close_connection:
+                    self.send_header("Connection", "close")
                 for key, value in headers.items():
                     self.send_header(key, value)
                 self.end_headers()
                 try:
                     self.wfile.write(body)
                     self.wfile.flush()
-                    if status == 200 and isinstance(data, dict) and data.get("operation") == "app.shutdown":
+                    if shutting_down:
                         controller.shutdown.requested.emit()
                 except (BrokenPipeError, ConnectionResetError):
                     pass

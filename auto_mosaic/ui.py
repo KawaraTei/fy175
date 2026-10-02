@@ -205,6 +205,13 @@ def resource_root() -> Path:
 
 
 class AutoMosaicWindow(QMainWindow):
+    def _notice(self, kind, title, text):
+        """Agent sessions receive notifications as data instead of modal dialogs."""
+        if getattr(self, "agent_notice", None) is not None:
+            self.agent_notice(kind, title, text)
+        else:
+            getattr(QMessageBox, kind)(self, title, text)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
@@ -1242,7 +1249,7 @@ class AutoMosaicWindow(QMainWindow):
                         continue
                     self._set_busy(False, "解析エラー")
                     if report_errors:
-                        QMessageBox.critical(self, "解析エラー", str(error))
+                        self._notice("critical", "解析エラー", str(error))
                 elif kind == "progress":
                     index, total, name = payload  # type: ignore[misc]
                     self.progress.setValue(int(index / total * 100))
@@ -1253,8 +1260,8 @@ class AutoMosaicWindow(QMainWindow):
                     self._set_busy(False, f"{len(outputs)}件を書き出しました")
                     if remove_after:
                         self._remove_processed_paths(completed_paths)
-                    QMessageBox.information(
-                        self,
+                    self._notice(
+                        "information",
                         "完了",
                         f"{len(outputs)}件を次のフォルダへ保存しました。\n{self.output_edit.text()}",
                     )
@@ -1269,20 +1276,20 @@ class AutoMosaicWindow(QMainWindow):
                     self._set_busy(False, f"{output.name}を書き出しました")
                     if remove_after:
                         self._remove_processed_paths([result.source_path])
-                    QMessageBox.information(self, "完了", f"保存しました。\n{output}")
+                    self._notice("information", "完了", f"保存しました。\n{output}")
                 elif kind == "batch_error":
                     error, completed_paths, remove_after = payload  # type: ignore[misc]
                     self._set_busy(False, "一括処理エラー")
                     if remove_after:
                         self._remove_processed_paths(completed_paths)
-                    QMessageBox.critical(
-                        self,
+                    self._notice(
+                        "critical",
                         "処理エラー",
                         f"{len(completed_paths)}件の保存後にエラーが発生しました。\n{error}",
                     )
                 elif kind == "error":
                     self._set_busy(False, "エラー")
-                    QMessageBox.critical(self, "処理エラー", str(payload))
+                    self._notice("critical", "処理エラー", str(payload))
         except queue.Empty:
             pass
 
@@ -1301,9 +1308,23 @@ class AutoMosaicWindow(QMainWindow):
 
 
 def run() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="FY175AutoMosaic: local image processing")
+    parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--agent-api", type=int, nargs="?", const=8765, metavar="PORT",
+                        help="Start built-in local HTTP agent API (default 8765). GET / for all operations.")
+    options = parser.parse_args()
     app = QApplication(sys.argv)
     window = AutoMosaicWindow()
-    smoke_test = "--smoke-test" in sys.argv
+    smoke_test = options.smoke_test
+    if options.agent_api is not None:
+        from auto_mosaic.agent_api import AgentServer
+
+        server = AgentServer(window, options.agent_api)
+        app.aboutToQuit.connect(server.close)
+        if sys.stdout is not None:
+            print(f"AGENT_API_READY {server.url} (GET / for capabilities)", flush=True)
     if not smoke_test:
         window.show()
     if smoke_test:

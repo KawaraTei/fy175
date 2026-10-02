@@ -56,6 +56,7 @@ class MosaicPipeline:
                 if detection.confidence < settings.confidence_threshold
             ][:BELOW_THRESHOLD_PREVIEW_LIMIT]
             combined_mask = np.zeros(image.shape[:2], dtype=bool)
+            detection_masks = []
             fallback_count = 0
             if detections:
                 segmenter = self._get_segmenter()
@@ -88,6 +89,7 @@ class MosaicPipeline:
                         candidate = refine_mask(candidate, settings.mask_expansion)
                         candidate = bounded_mask(candidate, detection.box)
                     combined_mask |= candidate
+                    detection_masks.append(candidate)
 
             effected = apply_effect(
                 image, combined_mask, settings.effect, settings.effect_size
@@ -99,6 +101,7 @@ class MosaicPipeline:
                 detections=detections,
                 below_threshold_detections=below_threshold_detections,
                 used_box_fallbacks=fallback_count,
+                detection_masks=detection_masks,
             )
 
     def save(
@@ -106,7 +109,14 @@ class MosaicPipeline:
         result: ProcessingResult,
         output_dir: Path,
         filename_suffix: str = "_mosaic",
+        *,
+        output_path: Path | None = None,
     ) -> Path:
+        if output_path is not None:
+            if output_path.exists():
+                raise FileExistsError(f"保存先が既に存在します: {output_path}")
+            save_image_bgr(output_path, result.image_bgr)
+            return output_path
         extension = result.source_path.suffix.lower()
         if extension not in {".png", ".jpg", ".jpeg"}:
             extension = ".png"
@@ -127,6 +137,7 @@ class MosaicPipeline:
         detections: list[Detection],
         used_box_fallbacks: int = 0,
         below_threshold_detections: list[Detection] | None = None,
+        detection_masks: list[np.ndarray] | None = None,
     ) -> ProcessingResult:
         image = load_image_bgr(path)
         if mask.shape != image.shape[:2]:
@@ -141,6 +152,7 @@ class MosaicPipeline:
             detections=list(detections),
             below_threshold_detections=list(below_threshold_detections or []),
             used_box_fallbacks=used_box_fallbacks,
+            detection_masks=[item & edited_mask for item in (detection_masks or [])],
         )
 
     def _get_detector(self, mode: ImageMode) -> YoloOnnxDetector:

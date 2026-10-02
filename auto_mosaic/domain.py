@@ -17,6 +17,9 @@ class EffectType(str, Enum):
     BLUR = "blur"
 
 
+PREVIEW_VIEWS = {"original": "元画像", "detection": "検出範囲", "mask_overlay": "マスク範囲", "result": "処理結果"}
+
+
 @dataclass(frozen=True)
 class Detection:
     class_name: str
@@ -44,3 +47,5 @@ class ProcessingResult:
     detections: list[Detection] = field(default_factory=list)
     below_threshold_detections: list[Detection] = field(default_factory=list)
     used_box_fallbacks: int = 0
+    # Index matches detections; each mask retains overlap with other detections.
+    detection_masks: list[np.ndarray] = field(default_factory=list)

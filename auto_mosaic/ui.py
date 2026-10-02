@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from auto_mosaic.domain import EffectType, ImageMode, ProcessingResult, ProcessingSettings
+from auto_mosaic.domain import EffectType, ImageMode, PREVIEW_VIEWS, ProcessingResult, ProcessingSettings
 from auto_mosaic.image_ops import (
     apply_effect,
     load_image_bgr,
@@ -335,7 +335,7 @@ class AutoMosaicWindow(QMainWindow):
         preview_bar_layout.setContentsMargins(10, 8, 10, 8)
         preview_bar_layout.addWidget(QLabel("表示"))
         self.preview_mode_combo = QComboBox()
-        self.preview_mode_combo.addItems(["元画像", "検出範囲", "処理結果"])
+        self.preview_mode_combo.addItems(list(PREVIEW_VIEWS.values()))
         self.preview_mode_combo.setCurrentText("処理結果")
         self.preview_mode_combo.currentTextChanged.connect(self._on_preview_mode_changed)
         preview_bar_layout.addWidget(self.preview_mode_combo)
@@ -736,7 +736,7 @@ class AutoMosaicWindow(QMainWindow):
             path is None
             or self.current_result is None
             or self.current_result.source_path != path
-            or self.preview_mode_combo.currentText() != "検出範囲"
+            or self.preview_mode_combo.currentText() not in {"検出範囲", "マスク範囲"}
         ):
             return
         self.mask_edit_active = True
@@ -787,7 +787,7 @@ class AutoMosaicWindow(QMainWindow):
             not self.busy
             and self.current_result is not None
             and self.current_result.source_path == path
-            and self.preview_mode_combo.currentText() == "検出範囲"
+            and self.preview_mode_combo.currentText() in {"検出範囲", "マスク範囲"}
         )
         self.mask_edit_button.setText(
             "編集を終了（破棄）" if self.mask_edit_active else "マスクを編集"
@@ -816,7 +816,7 @@ class AutoMosaicWindow(QMainWindow):
         self.preview_label.set_mask_editing(
             self.mask_edit_active
             and not self.busy
-            and self.preview_mode_combo.currentText() == "検出範囲"
+            and self.preview_mode_combo.currentText() in {"検出範囲", "マスク範囲"}
         )
         self.preview_label.set_zoom_enabled(self.preview_rgb is not None)
         self._update_brush_display_size()
@@ -926,6 +926,9 @@ class AutoMosaicWindow(QMainWindow):
         return suffix
 
     def _process_current(self) -> None:
+        self._save_current()
+
+    def _save_current(self, output_path: Path | None = None) -> None:
         path = self._selected_path()
         if path is None:
             QMessageBox.information(self, APP_NAME, "画像を選択してください。")
@@ -959,10 +962,12 @@ class AutoMosaicWindow(QMainWindow):
                         edit_reference.detections,
                         edit_reference.used_box_fallbacks,
                         edit_reference.below_threshold_detections,
+                        edit_reference.detection_masks,
                     )
                 else:
                     result = self.pipeline.analyze(path, settings)
-                output = self.pipeline.save(result, output_dir, filename_suffix)
+                output = (self.pipeline.save(result, output_dir, filename_suffix, output_path=output_path)
+                          if output_path is not None else self.pipeline.save(result, output_dir, filename_suffix))
                 self.events.put(
                     (
                         "single_complete",
@@ -1053,7 +1058,7 @@ class AutoMosaicWindow(QMainWindow):
         mode = self.preview_mode_combo.currentText()
         if mode == "元画像" or self.current_result is None:
             self._show_original(path)
-        elif mode == "検出範囲":
+        elif mode in {"検出範囲", "マスク範囲"}:
             original = (
                 self.mask_edit_original_bgr
                 if self.mask_edit_active and self.mask_edit_original_bgr is not None
@@ -1070,7 +1075,7 @@ class AutoMosaicWindow(QMainWindow):
                     mask,
                     self.current_result.detections,
                     self.current_result.below_threshold_detections,
-                    show_detection_annotations=not self.mask_edit_active,
+                    show_detection_annotations=not self.mask_edit_active and mode == "検出範囲",
                 )
             )
         elif self.mask_edit_active and self.edited_mask is not None:

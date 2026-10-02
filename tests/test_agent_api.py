@@ -30,7 +30,7 @@ class DeterministicPipeline:
         mask = np.zeros(image.shape[:2], bool)
         mask[25:60, 35:90] = True
         return ProcessingResult(path, apply_effect(image, mask, settings.effect, settings.effect_size), mask,
-                                [Detection("penis", .9, (35, 25, 90, 60))])
+                                [Detection("penis", .9, (35, 25, 90, 60))], detection_masks=[mask.copy()])
 
     def process_with_mask(self, *args, **kwargs):
         return self.original.process_with_mask(*args, **kwargs)
@@ -151,6 +151,63 @@ class AgentApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error:
             self.call("video.open", path=str(self.image))
         self.assertEqual(error.exception.code, 404)
+
+    def test_machine_state_utf8_and_detection_details(self):
+        state, headers = self.http("/state")
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(state["image"]["status"], "empty")
+        self.assertEqual(state["image"]["preview_view"], "result")
+        self.assertIn("画像", state["image"]["status_text"])
+        job = self.call("images.add", paths=[str(self.image)])
+        self.assertEqual(job["result"]["detections"][0]["index"], 0)
+        self.assertEqual(job["result"]["detections"][0]["class_name"], "penis")
+        self.assertEqual(job["result"]["detection_count"], 1)
+
+    def test_detection_edits_preserve_overlap_and_undo(self):
+        self.call("images.add", paths=[str(self.image)])
+        reference = self.window.current_result
+        second = np.zeros(reference.mask.shape, bool)
+        second[40:75, 70:110] = True
+        reference.detections.append(Detection("penis", .8, (70, 40, 110, 75)))
+        reference.detection_masks.append(second)
+        reference.mask |= second
+        original = reference.mask.copy()
+        self.call("mask.remove_detection", index=0)
+        edited, _ = self.decoded("/mask")
+        self.assertEqual(edited[30, 40], 0)
+        self.assertEqual(edited[45, 75], 255)
+        owned, _ = self.decoded("/mask?index=0")
+        self.assertFalse(owned.any())
+        self.call("mask.undo")
+        restored, _ = self.decoded("/mask")
+        self.assertTrue(np.array_equal(restored > 0, original))
+        self.call("mask.dilate", index=0, px=3)
+        grown, _ = self.decoded("/mask")
+        self.assertEqual(grown[23, 40], 255)
+        self.call("mask.undo")
+        self.call("mask.erode", index=0, px=3)
+        shrunk, _ = self.decoded("/mask")
+        self.assertEqual(shrunk[26, 40], 0)
+        self.assertEqual(shrunk[45, 75], 255)
+        self.call("mask.undo")
+        self.call("mask.edit", shape="rectangle", points=[[5, 5], [15, 15]])
+        self.call("mask.undo")
+        restored, _ = self.decoded("/mask")
+        self.assertTrue(np.array_equal(restored > 0, original))
+        self.call("mask.edit", shape="rectangle", points=[[5, 5], [15, 15]])
+        overlay, _ = self.decoded("/preview?view=mask_overlay")
+        expected = self.window.preview_rgb[:, :, ::-1]
+        self.assertTrue(np.array_equal(overlay, expected))
+        self.assertEqual(self.window.preview_mode_combo.currentText(), "マスク範囲")
+        output = self.root / "任意の名前.png"
+        job = self.call("image.save", path=str(output))
+        self.assertEqual(job["result"]["outputs"], [str(output)])
+        self.assertTrue(output.is_file())
+        state, _ = self.http("/state")
+        self.assertEqual(state["image"]["undo_depth"], 0)
+        with self.assertRaises(HTTPError) as error:
+            self.call("image.save", path=str(output))
+        self.assertEqual(error.exception.code, 409)
 
 
 if __name__ == "__main__":

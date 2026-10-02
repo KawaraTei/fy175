@@ -22,3 +22,5 @@ Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & '.venv\Scripts\python.exe' -m unittest tests.test_agent_api -v
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& '.venv\Scripts\python.exe' -c "from tests.test_detector import test_preview_candidates_have_confidence_floor_without_overriding_user_threshold; test_preview_candidates_have_confidence_floor_without_overriding_user_threshold(); print('preview confidence floor check passed')"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

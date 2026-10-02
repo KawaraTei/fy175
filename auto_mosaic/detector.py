@@ -10,6 +10,9 @@ from auto_mosaic.domain import Detection
 from auto_mosaic.model_catalog import DetectorSpec
 
 
+BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE = 0.1
+
+
 class YoloOnnxDetector:
     def __init__(self, model_path: Path, spec: DetectorSpec) -> None:
         self.spec = spec
@@ -54,6 +57,8 @@ class YoloOnnxDetector:
             class_id = int(np.argmax(class_scores))
             confidence = float(class_scores[class_id])
             if class_id not in wanted_indices:
+                continue
+            if confidence < confidence_threshold and confidence < BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE:
                 continue
             if confidence < confidence_threshold and below_threshold_limit <= 0:
                 continue

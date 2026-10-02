@@ -66,3 +66,18 @@ def test_detect_returns_only_five_best_below_threshold_candidates() -> None:
         0.2,
         0.1,
     ]
+
+
+def test_preview_candidates_have_confidence_floor_without_overriding_user_threshold() -> None:
+    detector = object.__new__(YoloOnnxDetector)
+    detector.spec = DetectorSpec("fake.onnx", ("penis",), {"penis": (0,)}, 100)
+    detector.input_name, detector.output_names = "images", ["output"]
+    rows = np.array([[10 + i * 15, 10, 8, 8, score]
+                     for i, score in enumerate([.6, .2, .1, .09, .0002])], dtype=np.float32)
+    detector.session = _FakeSession(rows[None, ...])
+    detector._prepare_input = lambda _image: (np.zeros((1, 3, 100, 100), np.float32), 1., 0, 0)
+    image = np.zeros((100, 100, 3), np.uint8)
+    normal = detector.detect(image, frozenset({"penis"}), .5, .35, 5)
+    assert [round(d.confidence, 4) for d in normal] == [.6, .2, .1]
+    lower_user_threshold = detector.detect(image, frozenset({"penis"}), .05, .35, 5)
+    assert [round(d.confidence, 4) for d in lower_user_threshold] == [.6, .2, .1, .09]

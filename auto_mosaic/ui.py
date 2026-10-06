@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -14,10 +15,12 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QImage,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPen,
     QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -63,6 +66,8 @@ PREVIEW_ZOOM_LEVELS = (1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
 
 class MaskPreviewLabel(QLabel):
     stroke_requested = Signal(QPointF, QPointF, bool)
+    stroke_started = Signal()
+    stroke_finished = Signal()
     zoom_requested = Signal(QPointF, int)
 
     def __init__(self, text: str = "") -> None:
@@ -119,6 +124,7 @@ class MaskPreviewLabel(QLabel):
             and self.image_rect.contains(event.position())
         ):
             self.last_position = event.position()
+            self.stroke_started.emit()
             erase = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
             self._set_brush_position(self.last_position, erase)
             self.stroke_requested.emit(self.last_position, self.last_position, erase)
@@ -144,6 +150,7 @@ class MaskPreviewLabel(QLabel):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self.mask_editing and event.button() == Qt.MouseButton.LeftButton:
             self.last_position = None
+            self.stroke_finished.emit()
             self._set_brush_position(
                 event.position(),
                 bool(event.modifiers() & Qt.KeyboardModifier.AltModifier),
@@ -232,6 +239,10 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path: Path | None = None
         self.edited_mask: np.ndarray | None = None
         self.mask_edit_original_bgr: np.ndarray | None = None
+        self.mask_undo_history = deque()
+        self.edit_detection_masks: list[np.ndarray] | None = None
+        self._mask_stroke_active = False
+        self._mask_stroke_recorded = False
         self.preview_image_rect = QRectF()
         self.preview_zoom_index = 0
         self.preview_render_target_size = (0, 0)
@@ -239,6 +250,9 @@ class AutoMosaicWindow(QMainWindow):
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.analysis_generation = 0
 
+        self.mask_undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.mask_undo_shortcut.activated.connect(self._undo_mask_edit)
+        self.mask_undo_shortcut.setEnabled(False)
         self._build_layout()
         self._apply_style()
         self.poll_timer = QTimer(self)
@@ -328,6 +342,12 @@ class AutoMosaicWindow(QMainWindow):
         self.preview_label.setMinimumSize(320, 320)
         self.preview_label.setObjectName("preview")
         self.preview_label.stroke_requested.connect(self._paint_mask_stroke)
+        self.preview_label.stroke_started.connect(self._begin_mask_stroke)
+        self.preview_label.stroke_finished.connect(self._finish_mask_stroke)
+        self.preview_label.setToolTip(
+            "マスク編集中: ドラッグで追加 / Alt+ドラッグで削除\n"
+            "Ctrl+Zで直前のマスク編集を元に戻します。"
+        )
         self.preview_label.zoom_requested.connect(self._zoom_preview)
         center_layout.addWidget(self.preview_label, 1)
         preview_bar = QFrame()
@@ -767,6 +787,8 @@ class AutoMosaicWindow(QMainWindow):
             self._refresh_preview()
 
     def _toggle_mask_edit(self) -> None:
+        if self.busy:
+            return
         if self.mask_edit_active:
             self._confirm_discard_mask_edit("マスク編集を終了", refresh_after=True)
             return
@@ -775,7 +797,6 @@ class AutoMosaicWindow(QMainWindow):
             path is None
             or self.current_result is None
             or self.current_result.source_path != path
-            or self.preview_mode() not in {"検出範囲", "マスク範囲"}
         ):
             return
         self.mask_edit_active = True
@@ -783,6 +804,10 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path = path
         self.edited_mask = self.current_result.mask.copy()
         self.mask_edit_original_bgr = load_image_bgr(path)
+        self._reset_mask_history()
+        self.edit_detection_masks = [mask.copy() for mask in self.current_result.detection_masks]
+        if self.preview_mode() not in {"検出範囲", "マスク範囲"}:
+            self.set_preview_mode("マスク範囲")
         self._update_mask_editor_interaction()
         self._update_mask_edit_controls()
         self._refresh_preview()
@@ -815,6 +840,7 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path = None
         self.edited_mask = None
         self.mask_edit_original_bgr = None
+        self._reset_mask_history()
         self._update_mask_editor_interaction()
         self._update_mask_edit_controls()
         if refresh_preview:
@@ -826,7 +852,6 @@ class AutoMosaicWindow(QMainWindow):
             not self.busy
             and self.current_result is not None
             and self.current_result.source_path == path
-            and self.preview_mode() in {"検出範囲", "マスク範囲"}
         )
         self.mask_edit_button.setText(
             "編集を終了（破棄）" if self.mask_edit_active else "マスクを編集"
@@ -852,6 +877,64 @@ class AutoMosaicWindow(QMainWindow):
         self.process_current_button.setEnabled(not self.busy)
         self.copy_current_button.setEnabled(not self.busy)
         self.process_button.setEnabled(not self.mask_edit_active and not self.busy)
+        self.mask_undo_shortcut.setEnabled(
+            self.mask_edit_active and not self.busy
+            and not self._mask_stroke_active and bool(self.mask_undo_history)
+        )
+
+    def _reset_mask_history(self) -> None:
+        self.mask_undo_history.clear()
+        self.edit_detection_masks = None
+        self._mask_stroke_active = False
+        self._mask_stroke_recorded = False
+
+    def _begin_mask_stroke(self) -> None:
+        self._mask_stroke_active = True
+        self._mask_stroke_recorded = False
+        self._update_mask_edit_controls()
+
+    def _finish_mask_stroke(self) -> None:
+        self._mask_stroke_active = False
+        self._mask_stroke_recorded = False
+        self._update_mask_edit_controls()
+
+    def _apply_mask_edit(self, candidate, owned=None, *, record_history=True) -> bool:
+        old = self.edited_mask
+        previous_owned = self.edit_detection_masks or []
+        next_owned = [mask & candidate for mask in (previous_owned if owned is None else owned)]
+        if np.array_equal(old, candidate) and len(previous_owned) == len(next_owned) and all(
+            np.array_equal(a, b) for a, b in zip(previous_owned, next_owned)
+        ):
+            return False
+        if record_history:
+            packed = [np.packbits(mask).tobytes() for mask in [old, *previous_owned]]
+            if sum(map(len, packed)) > 128 * 1024 * 1024:
+                raise ValueError("マスクが大きすぎるため、元に戻せる状態で編集できません。")
+            self.mask_undo_history.append((old.shape, packed, self.mask_edit_dirty))
+            while len(self.mask_undo_history) > 20 or sum(
+                sum(map(len, entry[1])) for entry in self.mask_undo_history
+            ) > 128 * 1024 * 1024:
+                self.mask_undo_history.popleft()
+        self.edited_mask = candidate
+        self.edit_detection_masks = next_owned
+        self.mask_edit_dirty = True
+        self._update_mask_edit_controls()
+        self._refresh_preview()
+        return True
+
+    def _undo_mask_edit(self) -> None:
+        if self.busy or self._mask_stroke_active or not self.mask_edit_active or not self.mask_undo_history:
+            return
+        shape, packed, dirty = self.mask_undo_history.pop()
+        arrays = [
+            np.unpackbits(np.frombuffer(mask, np.uint8), count=shape[0] * shape[1])
+            .reshape(shape).astype(bool) for mask in packed
+        ]
+        self.edited_mask, self.edit_detection_masks = arrays[0], arrays[1:]
+        self.mask_edit_dirty = dirty
+        self._update_mask_edit_controls()
+        self._refresh_preview()
+        self.status_label.setText("マスク編集を元に戻しました")
 
     def _update_mask_editor_interaction(self) -> None:
         self.preview_label.set_mask_editing(
@@ -1003,6 +1086,7 @@ class AutoMosaicWindow(QMainWindow):
         remove_after = self.remove_after_process_check.isChecked()
         edited_mask = self.edited_mask.copy() if self.mask_edit_active else None
         edit_reference = self.current_result if self.mask_edit_active else None
+        edited_owned = self.edit_detection_masks
         if self.mask_edit_active and (
             edited_mask is None
             or edit_reference is None
@@ -1022,7 +1106,7 @@ class AutoMosaicWindow(QMainWindow):
                         edit_reference.detections,
                         edit_reference.used_box_fallbacks,
                         edit_reference.below_threshold_detections,
-                        edit_reference.detection_masks,
+                        edited_owned if edited_owned is not None else edit_reference.detection_masks,
                     )
                 else:
                     result = self.pipeline.analyze(path, settings)
@@ -1163,21 +1247,25 @@ class AutoMosaicWindow(QMainWindow):
     def _paint_mask_stroke(
         self, start: QPointF, end: QPointF, erase: bool
     ) -> None:
-        if not self.mask_edit_active or self.edited_mask is None:
+        if self.busy or not self.mask_edit_active or self.edited_mask is None:
             return
         start_point = self._preview_point_to_mask(start)
         end_point = self._preview_point_to_mask(end)
         if start_point is None or end_point is None:
             return
+        candidate = self.edited_mask.copy()
         if paint_mask_stroke(
-            self.edited_mask,
+            candidate,
             start_point,
             end_point,
             self.brush_size_slider.value(),
             erase,
         ):
-            self.mask_edit_dirty = True
-            self._refresh_preview()
+            try:
+                self._apply_mask_edit(candidate, record_history=not self._mask_stroke_recorded)
+                self._mask_stroke_recorded = self._mask_stroke_active
+            except ValueError as error:
+                self._notice("warning", "マスク編集", str(error))
 
     def _preview_point_to_mask(self, position: QPointF) -> tuple[int, int] | None:
         if self.edited_mask is None or self.preview_image_rect.isEmpty():

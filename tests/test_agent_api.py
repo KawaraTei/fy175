@@ -14,6 +14,8 @@ from urllib.error import HTTPError
 import cv2
 import numpy as np
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from auto_mosaic.agent_api import AgentServer
 from auto_mosaic.agent_client import request
@@ -239,6 +241,24 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(job["result"]["detections"][0]["index"], 0)
         self.assertEqual(job["result"]["detections"][0]["class_name"], "penis")
         self.assertEqual(job["result"]["detection_count"], 1)
+
+    def test_gui_and_api_share_mask_undo_history(self):
+        self.call("images.add", paths=[str(self.image)])
+        original = self.window.current_result.mask.copy()
+        self.call("mask.edit", shape="rectangle", points=[[5, 5], [15, 15]])
+        after_api = self.window.edited_mask.copy()
+        point = self.window.preview_image_rect.center()
+        self.window._paint_mask_stroke(point, point, True)
+        self.assertFalse(np.array_equal(self.window.edited_mask, after_api))
+        self.call("mask.undo")
+        self.assertTrue(np.array_equal(self.window.edited_mask, after_api))
+        self.window.activateWindow()
+        QTest.qWait(30)
+        QTest.keyClick(self.window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        self.assertTrue(np.array_equal(self.window.edited_mask, original))
+        state, _ = self.http("/state")
+        self.assertEqual(state["image"]["undo_depth"], 0)
+        self.assertFalse(state["image"]["mask_dirty"])
 
     def test_detection_edits_preserve_overlap_and_undo(self):
         self.call("images.add", paths=[str(self.image)])

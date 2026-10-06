@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt, QUrl
-from PySide6.QtGui import QDropEvent, QWheelEvent
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRectF, Qt, QUrl
+from PySide6.QtGui import QDropEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -97,6 +97,78 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
             assert all(settings.mask_expansion == 0 for settings in received[1:])
     finally:
         window._end_mask_edit(refresh_preview=False)
+        window.close()
+
+
+def test_edit_from_any_preview_and_undo_whole_strokes() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    window.show()
+    window.activateWindow()
+    QTest.qWait(30)
+    try:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "sample.png"
+            Image.new("RGB", (160, 100), (80, 120, 160)).save(source)
+            window.pipeline.analyze = lambda path, settings: ProcessingResult(
+                path, load_image_bgr(path), np.zeros((100, 160), dtype=bool)
+            )
+            window._add_image_paths([source])
+            deadline = monotonic() + 3
+            while monotonic() < deadline:
+                app.processEvents()
+                window._poll_events()
+                if not window.busy and window.current_result is not None:
+                    break
+                sleep(.01)
+            for view in ("元画像", "処理結果", "検出範囲", "マスク範囲"):
+                QTest.mouseClick(window.preview_mode_buttons[view], Qt.MouseButton.LeftButton)
+                assert window.preview_mode() == view
+                assert sum(button.isChecked() for button in window.preview_mode_buttons.values()) == 1
+                assert window.mask_edit_button.isEnabled()
+                window.mask_edit_button.click()
+                assert window.mask_edit_active and window.preview_label.mask_editing
+                assert window.preview_mode() == (view if view in {"検出範囲", "マスク範囲"} else "マスク範囲")
+                window._end_mask_edit(True)
+            window._toggle_mask_edit()
+            window.brush_size_slider.setValue(8)
+            rect = window.preview_image_rect
+            positions = [QPointF(rect.left() + rect.width() * x, rect.center().y()) for x in (.2, .4, .6)]
+
+            def drag(modifiers):
+                QTest.mousePress(window.preview_label, Qt.MouseButton.LeftButton, modifiers, positions[0].toPoint())
+                for pos in positions[1:]:
+                    event = QMouseEvent(QEvent.Type.MouseMove, pos, pos,
+                                        Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, modifiers)
+                    QApplication.sendEvent(window.preview_label, event)
+                QTest.mouseRelease(window.preview_label, Qt.MouseButton.LeftButton, modifiers, positions[-1].toPoint())
+
+            def undo():
+                QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+                app.processEvents()
+
+            drag(Qt.KeyboardModifier.NoModifier)
+            added = window.edited_mask.copy()
+            assert added[50, 32] and added[50, 64] and added[50, 96]
+            assert len(window.mask_undo_history) == 1
+            drag(Qt.KeyboardModifier.AltModifier)
+            assert not window.edited_mask.any() and len(window.mask_undo_history) == 2
+            undo()
+            assert np.array_equal(window.edited_mask, added)
+            undo()
+            assert not window.edited_mask.any() and not window.mask_edit_dirty
+            assert not window.mask_undo_history
+            drag(Qt.KeyboardModifier.AltModifier)
+            assert not window.mask_undo_history
+            drag(Qt.KeyboardModifier.NoModifier)
+            window.set_preview_mode("処理結果")
+            undo()
+            assert not window.edited_mask.any()
+            window._end_mask_edit(True)
+            window._toggle_mask_edit()
+            assert not window.mask_undo_history and not window.mask_undo_shortcut.isEnabled()
+    finally:
+        window._end_mask_edit(False)
         window.close()
 
 

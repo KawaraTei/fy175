@@ -98,8 +98,6 @@ class AgentController:
         self.jobs = {}
         self.active = {}
         self.notifications = deque(maxlen=50)
-        self.undo_history = deque()
-        self.edit_detection_masks = None
         self.last_error = None
         self.preview_events = queue.Queue()
         self.preview_cache = None
@@ -130,8 +128,6 @@ class AgentController:
                 self._reset_history()
                 result = self._result_details(payload[1])
             elif event == "single_complete":
-                if payload[3] and self.edit_detection_masks is not None:
-                    payload[0].detection_masks = self.edit_detection_masks
                 result = {"outputs": [str(payload[1])], **self._result_details(payload[0]),
                           "mask_source": "edited" if payload[3] else "reanalyzed",
                           "used_edited_mask": bool(payload[3]), "detection_rerun": not payload[3]}
@@ -215,8 +211,8 @@ class AgentController:
         self._reset_history()
 
     def _reset_history(self):
-        self.undo_history.clear()
-        self.edit_detection_masks = None
+        self.window._reset_mask_history()
+        self.window._update_mask_edit_controls()
 
     @staticmethod
     def _result_details(result):
@@ -228,36 +224,23 @@ class AgentController:
                 "mask_pixels": int(result.mask.sum()), "box_fallbacks": result.used_box_fallbacks}
 
     def _owned_masks(self):
-        return (self.edit_detection_masks if self.edit_detection_masks is not None
+        return (self.window.edit_detection_masks if self.window.edit_detection_masks is not None
                 else self.window.current_result.detection_masks)
 
     def _install_mask(self, candidate, owned=None):
         w = self.window
-        old = self._mask("image")
-        previous_owned = self._owned_masks()
-        if np.array_equal(old, candidate) and (owned is None or all(np.array_equal(a, b) for a, b in zip(previous_owned, owned))):
-            return
-        packed = [np.packbits(item).tobytes() for item in [old, *previous_owned]]
-        require(sum(len(item) for item in packed) <= 128 * 1024 * 1024, "Mask snapshot exceeds undo memory limit", 413)
-        self.undo_history.append((old.shape, packed))
-        while len(self.undo_history) > 1 and (len(self.undo_history) > 20 or sum(sum(len(b) for b in entry[1]) for entry in self.undo_history) > 128 * 1024 * 1024):
-            self.undo_history.popleft()
         if not w.mask_edit_active:
             w.set_preview_mode("マスク範囲")
             w._toggle_mask_edit()
-        w.edited_mask = candidate
-        self.edit_detection_masks = [item & candidate for item in (previous_owned if owned is None else owned)]
-        w.mask_edit_dirty = True
+        try:
+            w._apply_mask_edit(candidate, owned)
+        except ValueError as error:
+            raise ApiError(str(error), 413) from error
         self.last_error = None
-        w._refresh_preview()
 
     def undo(self):
-        require(self.window.mask_edit_active and self.undo_history, "No mask operation to undo", 409)
-        shape, packed = self.undo_history.pop()
-        arrays = [np.unpackbits(np.frombuffer(item, np.uint8), count=shape[0] * shape[1]).reshape(shape).astype(bool) for item in packed]
-        self.window.edited_mask, self.edit_detection_masks = arrays[0], arrays[1:]
-        self.window.mask_edit_dirty = not np.array_equal(arrays[0], self.window.current_result.mask)
-        self.window._refresh_preview()
+        require(self.window.mask_edit_active and self.window.mask_undo_history, "No mask operation to undo", 409)
+        self.window._undo_mask_edit()
 
     def transform_mask(self, name, args):
         combined = self._mask("image")
@@ -405,7 +388,7 @@ class AgentController:
                   "mask_dirty": w.mask_edit_dirty,
                   "preview_view": next(key for key, label in VIEWS.items() if label == w.preview_mode()),
                   "preview_view_text": w.preview_mode(),
-                  "undo_depth": len(self.undo_history) if w.mask_edit_active else 0, "last_error": self.last_error},
+                  "undo_depth": len(w.mask_undo_history) if w.mask_edit_active else 0, "last_error": self.last_error},
                   "notifications": list(self.notifications), "active_jobs": [dict(job) for job in self.active.values()]}
         if w.current_result is not None:
             mask = w.edited_mask if w.mask_edit_active else w.current_result.mask

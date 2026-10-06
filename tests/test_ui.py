@@ -80,7 +80,7 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
             window.set_preview_mode("検出範囲")
             QTest.mouseClick(window.mask_edit_button, Qt.MouseButton.LeftButton)
             assert window.mask_edit_active
-            assert not window.mask_threshold_spin.isEnabled()
+            assert window.mask_threshold_spin.isEnabled()
             assert not window.mask_expansion_spin.isEnabled()
             window._end_mask_edit(refresh_preview=True)
             assert window.mask_threshold_spin.isEnabled()
@@ -97,6 +97,88 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
             assert all(settings.mask_expansion == 0 for settings in received[1:])
     finally:
         window._end_mask_edit(refresh_preview=False)
+        window.close()
+
+
+def test_shift_click_region_add_erase_and_error_preserve_draft() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    window.show()
+    app.processEvents()
+
+    def wait_idle():
+        deadline = monotonic() + 3
+        while monotonic() < deadline:
+            app.processEvents()
+            window._poll_events()
+            if not window.busy:
+                return
+            sleep(0.01)
+        raise AssertionError("region selection did not finish")
+
+    try:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "sample.png"
+            Image.new("RGB", (100, 80), (80, 120, 160)).save(source)
+            window.pipeline.analyze = lambda path, settings: ProcessingResult(
+                path, load_image_bgr(path), np.zeros((80, 100), dtype=bool)
+            )
+            window._add_image_paths([source])
+            wait_idle()
+            window.set_preview_mode("マスク範囲")
+            window._toggle_mask_edit()
+            window.mask_threshold_spin.setValue(1.5)
+            window._zoom_preview(window.preview_image_rect.center(), 1)
+            point = window.preview_image_rect.center().toPoint()
+            expected_point = window._preview_point_to_mask(QPointF(point))
+            region = np.zeros((80, 100), dtype=bool)
+            region[25:55, 35:65] = True
+            region[37:43, 47:53] = False  # A brush dab would incorrectly fill this hole.
+            encoded = object()
+            with patch.object(window.pipeline, "select_mask_region", return_value=(region, encoded)) as select:
+                QTest.mouseClick(window.preview_label, Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.ShiftModifier, point)
+                assert not window.mask_threshold_spin.isEnabled()
+                wait_idle()
+                assert np.array_equal(window.edited_mask, region)
+                assert window.mask_edit_dirty
+                assert select.call_args.args[1:] == (expected_point, 1.5, None)
+                window.edited_mask[0, 0] = True
+                window.mask_threshold_spin.setValue(-0.5)
+                QTest.mouseClick(window.preview_label, Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier, point)
+                wait_idle()
+                assert window.edited_mask.sum() == 1 and window.edited_mask[0, 0]
+                assert select.call_args.args[1:] == (expected_point, -0.5, encoded)
+                assert window.mask_threshold_spin.isEnabled()
+                window._zoom_preview(window.preview_image_rect.center(), -1)
+                assert not window.preview_image_rect.contains(QPointF(1, 1))
+                QTest.mouseClick(window.preview_label, Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.ShiftModifier, QPoint(1, 1))
+                assert select.call_count == 2
+                window.activateWindow()
+                QTest.qWait(20)
+                QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+                assert np.array_equal(window.edited_mask[1:], region[1:])
+                QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+                assert not window.edited_mask.any() and not window.mask_edit_dirty
+            before = window.edited_mask.copy()
+            with patch.object(window.pipeline, "select_mask_region", side_effect=RuntimeError("test")), patch.object(window, "_notice") as notice:
+                QTest.mouseClick(window.preview_label, Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.ShiftModifier, point)
+                wait_idle()
+                assert np.array_equal(window.edited_mask, before)
+                assert window.preview_label.mask_editing
+                notice.assert_called_once()
+            # Results from an ended edit session must never modify a new draft.
+            old_draft = window.edited_mask
+            window._end_mask_edit(False)
+            window._toggle_mask_edit()
+            window.events.put(("mask_region", (window.analysis_generation, old_draft, False, region, encoded)))
+            window._poll_events()
+            assert not window.edited_mask.any()
+    finally:
+        window._end_mask_edit(False)
         window.close()
 
 

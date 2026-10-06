@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from threading import Lock
 
+import cv2
 import numpy as np
 
 from auto_mosaic.detector import YoloOnnxDetector
@@ -104,6 +105,32 @@ class MosaicPipeline:
                 used_box_fallbacks=fallback_count,
                 detection_masks=detection_masks,
             )
+
+    def select_mask_region(
+        self,
+        image: np.ndarray,
+        point: tuple[int, int],
+        mask_threshold: float,
+        embedding: tuple[list[np.ndarray], tuple[int, int]] | None = None,
+    ) -> tuple[np.ndarray, tuple[list[np.ndarray], tuple[int, int]]]:
+        """Select only the component containing the seed, without a box fallback."""
+        x, y = point
+        height, width = image.shape[:2]
+        if not (0 <= x < width and 0 <= y < height):
+            raise ValueError("画像の範囲内をクリックしてください。")
+        with self._lock:
+            segmenter = self._get_segmenter()
+            if embedding is None:
+                embedding = segmenter.encode(image)
+            candidates = segmenter.mask_candidates_from_point(
+                embedding, point, mask_threshold
+            )
+            containing = [(mask, score) for mask, score in candidates if mask[y, x]]
+            if not containing:
+                return np.zeros((height, width), dtype=bool), embedding
+            mask = max(containing, key=lambda item: item[1])[0]
+            _, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
+            return labels == labels[y, x], embedding
 
     def save(
         self,

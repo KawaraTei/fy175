@@ -68,6 +68,7 @@ class MaskPreviewLabel(QLabel):
     stroke_requested = Signal(QPointF, QPointF, bool)
     stroke_started = Signal()
     stroke_finished = Signal()
+    region_requested = Signal(QPointF, bool)
     zoom_requested = Signal(QPointF, int)
 
     def __init__(self, text: str = "") -> None:
@@ -123,6 +124,16 @@ class MaskPreviewLabel(QLabel):
             and event.button() == Qt.MouseButton.LeftButton
             and self.image_rect.contains(event.position())
         ):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self.last_position = None
+                self.brush_position = None
+                self.update()
+                self.region_requested.emit(
+                    event.position(),
+                    bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier),
+                )
+                event.accept()
+                return
             self.last_position = event.position()
             self.stroke_started.emit()
             erase = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
@@ -239,6 +250,7 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path: Path | None = None
         self.edited_mask: np.ndarray | None = None
         self.mask_edit_original_bgr: np.ndarray | None = None
+        self.mask_edit_embedding: tuple[list[np.ndarray], tuple[int, int]] | None = None
         self.mask_undo_history = deque()
         self.edit_detection_masks: list[np.ndarray] | None = None
         self._mask_stroke_active = False
@@ -344,8 +356,11 @@ class AutoMosaicWindow(QMainWindow):
         self.preview_label.stroke_requested.connect(self._paint_mask_stroke)
         self.preview_label.stroke_started.connect(self._begin_mask_stroke)
         self.preview_label.stroke_finished.connect(self._finish_mask_stroke)
+        self.preview_label.region_requested.connect(self._select_mask_region)
         self.preview_label.setToolTip(
             "マスク編集中: ドラッグで追加 / Alt+ドラッグで削除\n"
+            "Shift+クリックでAI領域を追加 / Ctrl+Shift+クリックで削除\n"
+            "AI領域選択には現在のマスク閾値を使用します。\n"
             "Ctrl+Zで直前のマスク編集を元に戻します。"
         )
         self.preview_label.zoom_requested.connect(self._zoom_preview)
@@ -437,6 +452,7 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_threshold_spin.setToolTip(
             "低いほど広く、高いほど狭く判定します。\n"
             f"初期値: {ProcessingSettings.mask_threshold:.1f}。変更後は「この画像を再解析」。\n"
+            "編集中は次のShift+クリックによる領域選択に反映します。\n"
             "矩形補完になった対象には効きません。"
         )
         mask_threshold_label.setBuddy(self.mask_threshold_spin)
@@ -461,10 +477,10 @@ class AutoMosaicWindow(QMainWindow):
         mask_expansion_label.setBuddy(self.mask_expansion_spin)
         mask_expansion_row.addWidget(self.mask_expansion_spin)
         right_layout.addLayout(mask_expansion_row)
-        mask_hint = QLabel("閾値：低いほど広く、高いほど狭く\n変更後は「この画像を再解析」")
-        mask_hint.setObjectName("muted")
-        mask_hint.setWordWrap(True)
-        right_layout.addWidget(mask_hint)
+        self.mask_hint = QLabel("閾値：低いほど広く、高いほど狭く\n変更後は「この画像を再解析」")
+        self.mask_hint.setObjectName("muted")
+        self.mask_hint.setWordWrap(True)
+        right_layout.addWidget(self.mask_hint)
         right_layout.addWidget(self.analyze_button)
         right_layout.addWidget(self.mask_edit_button)
         brush_row = QHBoxLayout()
@@ -812,7 +828,7 @@ class AutoMosaicWindow(QMainWindow):
         self._update_mask_edit_controls()
         self._refresh_preview()
         self.status_label.setText(
-            "マスク編集中: ドラッグで追加 / Alt+ドラッグで削除"
+            "マスク編集中: Shift+クリックで領域追加 / Ctrl+Shift+クリックで領域削除"
         )
 
     def _confirm_discard_mask_edit(
@@ -840,6 +856,7 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_source_path = None
         self.edited_mask = None
         self.mask_edit_original_bgr = None
+        self.mask_edit_embedding = None
         self._reset_mask_history()
         self._update_mask_editor_interaction()
         self._update_mask_edit_controls()
@@ -871,7 +888,11 @@ class AutoMosaicWindow(QMainWindow):
         self.penis_check.setEnabled(not self.mask_edit_active and not self.busy)
         self.vagina_check.setEnabled(not self.mask_edit_active and not self.busy)
         self.threshold_slider.setEnabled(not self.mask_edit_active and not self.busy)
-        self.mask_threshold_spin.setEnabled(not self.mask_edit_active and not self.busy)
+        self.mask_threshold_spin.setEnabled(not self.busy)
+        self.mask_hint.setText(
+            "閾値：低いほど広く、高いほど狭く\n"
+            + ("次の領域選択に反映" if self.mask_edit_active else "変更後は「この画像を再解析」")
+        )
         self.mask_expansion_spin.setEnabled(not self.mask_edit_active and not self.busy)
         self.analyze_button.setEnabled(not self.mask_edit_active and not self.busy)
         self.process_current_button.setEnabled(not self.busy)
@@ -1244,6 +1265,36 @@ class AutoMosaicWindow(QMainWindow):
         else:
             self._set_preview_bgr(self.current_result.image_bgr)
 
+    def _select_mask_region(self, position: QPointF, erase: bool) -> None:
+        if (
+            self.busy
+            or not self.preview_label.mask_editing
+            or self.edited_mask is None
+            or self.mask_edit_original_bgr is None
+            or not self.preview_image_rect.contains(position)
+        ):
+            return
+        point = self._preview_point_to_mask(position)
+        if point is None:
+            return
+        draft = self.edited_mask
+        image = self.mask_edit_original_bgr
+        embedding = self.mask_edit_embedding
+        threshold = self.mask_threshold_spin.value()
+        generation = self.analysis_generation
+        self._set_busy(True, "クリック位置の領域を選択しています…")
+
+        def work() -> None:
+            try:
+                region, encoded = self.pipeline.select_mask_region(
+                    image, point, threshold, embedding
+                )
+                self.events.put(("mask_region", (generation, draft, erase, region, encoded)))
+            except Exception as error:
+                self.events.put(("mask_region_error", (generation, draft, error)))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _paint_mask_stroke(
         self, start: QPointF, end: QPointF, erase: bool
     ) -> None:
@@ -1384,7 +1435,39 @@ class AutoMosaicWindow(QMainWindow):
         try:
             while True:
                 kind, payload = self.events.get_nowait()
-                if kind == "analysis":
+                if kind == "mask_region":
+                    generation, draft, erase, region, embedding = payload
+                    if generation != self.analysis_generation:
+                        continue
+                    if draft is not self.edited_mask:
+                        self._set_busy(False, "領域選択を破棄しました")
+                        continue
+                    self.mask_edit_embedding = embedding
+                    candidate = draft.copy()
+                    candidate[region] = not erase
+                    try:
+                        changed = self._apply_mask_edit(candidate)
+                    except ValueError as error:
+                        self._set_busy(False, "領域選択エラー")
+                        self._notice("warning", "マスク編集", str(error))
+                        continue
+                    status = "マスクに変更はありません"
+                    if changed:
+                        status = (
+                            "選択領域をマスクから削除しました" if erase else
+                            "選択領域をマスクに追加しました"
+                        )
+                    if not np.any(region):
+                        status = "領域が見つかりません。マスク閾値を下げるか、クリック位置を変えてください。"
+                    self._set_busy(False, status)
+                elif kind == "mask_region_error":
+                    generation, draft, error = payload
+                    if generation != self.analysis_generation:
+                        continue
+                    self._set_busy(False, "領域選択エラー")
+                    if draft is self.edited_mask:
+                        self._notice("critical", "領域選択エラー", str(error))
+                elif kind == "analysis":
                     generation, result = payload  # type: ignore[misc]
                     if generation != self.analysis_generation:
                         continue

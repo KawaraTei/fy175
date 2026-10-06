@@ -10,7 +10,7 @@ from auto_mosaic.domain import ProcessingSettings
 
 
 class Sam2OnnxSegmenter:
-    """SAM2 ONNX box-prompt segmentation with one cached embedding per image."""
+    """SAM2 ONNX segmentation using box or point prompts."""
 
     def __init__(self, encoder_path: Path, decoder_path: Path) -> None:
         providers = ["CPUExecutionProvider"]
@@ -60,17 +60,33 @@ class Sam2OnnxSegmenter:
         box: tuple[int, int, int, int],
         mask_threshold: float = ProcessingSettings.mask_threshold,
     ) -> list[tuple[np.ndarray, float]]:
-        encoder_outputs, original_size = embedding
-        original_height, original_width = original_size
         x1, y1, x2, y2 = box
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
         point_coords = np.array(
             [[[center_x, center_y], [x1, y1], [x2, y2]]], dtype=np.float32
         )
+        point_labels = np.array([[1, 2, 3]], dtype=np.float32)
+        return self._mask_candidates(embedding, point_coords, point_labels, mask_threshold)
+
+    def mask_candidates_from_point(
+        self,
+        embedding: tuple[list[np.ndarray], tuple[int, int]],
+        point: tuple[int, int],
+        mask_threshold: float = ProcessingSettings.mask_threshold,
+    ) -> list[tuple[np.ndarray, float]]:
+        # A positive point and SAM's padding token; erasing selects the same region.
+        point_coords = np.array([[point, (0, 0)]], dtype=np.float32)
+        point_labels = np.array([[1, -1]], dtype=np.float32)
+        return self._mask_candidates(embedding, point_coords, point_labels, mask_threshold)
+
+    def _mask_candidates(
+        self, embedding, point_coords, point_labels, mask_threshold
+    ) -> list[tuple[np.ndarray, float]]:
+        encoder_outputs, original_size = embedding
+        original_height, original_width = original_size
         point_coords[..., 0] *= self.input_width / original_width
         point_coords[..., 1] *= self.input_height / original_height
-        point_labels = np.array([[1, 2, 3]], dtype=np.float32)
         mask_input = np.zeros(
             (1, 1, self.input_height // 4, self.input_width // 4), dtype=np.float32
         )

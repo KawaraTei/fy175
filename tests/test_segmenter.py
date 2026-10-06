@@ -63,3 +63,15 @@ def test_mask_threshold_changes_pixel_inclusion_without_changing_scores() -> Non
         assert narrow[index][0].sum() == 0
         assert wide[index][1] == default[index][1] == narrow[index][1]
     assert np.array_equal(segmenter.mask_from_box(embedding, box, -0.5), wide[1][0])
+
+
+def test_point_prompt_scales_coordinates_and_uses_mask_threshold() -> None:
+    segmenter, embedding = _segmenter_and_embedding()
+    embedding = (embedding[0], (16, 32))
+    wide = segmenter.mask_candidates_from_point(embedding, (16, 8), -0.5)
+    narrow = segmenter.mask_candidates_from_point(embedding, (16, 8), 1.0)
+    assert segmenter.decoder.feed["point_coords"].tolist() == [[[4, 4], [0, 0]]]
+    assert segmenter.decoder.feed["point_labels"].tolist() == [[1, -1]]
+    assert wide[0][0].shape == (16, 32)
+    assert wide[0][0].all()
+    assert not narrow[0][0].any()

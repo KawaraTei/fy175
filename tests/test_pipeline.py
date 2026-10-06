@@ -23,6 +23,31 @@ def _result(source: Path) -> ProcessingResult:
     )
 
 
+def test_point_region_keeps_seed_component_and_reuses_embedding() -> None:
+    from unittest.mock import Mock
+
+    pipeline = MosaicPipeline(Path("models"))
+    image = np.zeros((20, 30, 3), dtype=np.uint8)
+    mask = np.zeros((20, 30), dtype=bool)
+    mask[2:6, 3:8] = True
+    mask[12:18, 20:28] = True
+    unrelated = np.zeros_like(mask)
+    unrelated[12:18, 20:28] = True
+    segmenter = Mock()
+    embedding = ([], image.shape[:2])
+    segmenter.encode.return_value = embedding
+    segmenter.mask_candidates_from_point.return_value = [(unrelated, 0.99), (mask, 0.8)]
+    pipeline._segmenter = segmenter
+    region, encoded = pipeline.select_mask_region(image, (4, 3), 1.5)
+    assert encoded is embedding
+    assert region.sum() == 20
+    assert region[3, 4] and not region[14, 22]
+    segmenter.mask_candidates_from_point.assert_called_with(embedding, (4, 3), 1.5)
+    empty, _ = pipeline.select_mask_region(image, (0, 0), -1.5, encoded)
+    assert not empty.any()
+    segmenter.encode.assert_called_once()
+
+
 def test_save_uses_custom_suffix() -> None:
     with TemporaryDirectory() as temporary:
         output_dir = Path(temporary)

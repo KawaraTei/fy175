@@ -13,6 +13,8 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $env:QT_QPA_PLATFORM = 'offscreen'
 & '.venv\Scripts\python.exe' -c "from tests.test_ui import test_edit_from_any_preview_and_undo_whole_strokes; test_edit_from_any_preview_and_undo_whole_strokes(); print('mask entry and Ctrl+Z checks passed')"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& '.venv\Scripts\python.exe' -c "from tests.test_segmenter import test_point_prompt_scales_coordinates_and_uses_mask_threshold; from tests.test_pipeline import test_point_region_keeps_seed_component_and_reuses_embedding; from tests.test_ui import test_shift_click_region_add_erase_and_error_preserve_draft; test_point_prompt_scales_coordinates_and_uses_mask_threshold(); test_point_region_keeps_seed_component_and_reuses_embedding(); test_shift_click_region_add_erase_and_error_preserve_draft(); print('point selection checks passed')"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & '.venv\Scripts\python.exe' -c "from tests.test_image_ops import test_refine_mask_keeps_contour_correction_with_zero_or_small_expansion; test_refine_mask_keeps_contour_correction_with_zero_or_small_expansion(); print('independent contour correction check passed')"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & '.venv\Scripts\python.exe' -c "from tests.test_segmenter import test_mask_threshold_changes_pixel_inclusion_without_changing_scores; from tests.test_ui import test_mask_settings_reach_analysis_and_saving_and_lock_during_editing; test_mask_threshold_changes_pixel_inclusion_without_changing_scores(); test_mask_settings_reach_analysis_and_saving_and_lock_during_editing(); print('mask settings checks passed')"

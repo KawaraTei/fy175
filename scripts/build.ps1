@@ -8,6 +8,8 @@ if (-not (Test-Path '.venv\Scripts\python.exe')) {
 
 & '.venv\Scripts\python.exe' -m pip install -r requirements.txt
 & '.venv\Scripts\python.exe' scripts\download_models.py
+& '.venv\Scripts\python.exe' scripts\build_icon.py
+if ($LASTEXITCODE -ne 0) { throw 'Application icon generation failed.' }
 
 $originalPath = $env:PATH
 try {
@@ -18,7 +20,9 @@ try {
         --windowed `
         --onedir `
         --name FY175AutoMosaic `
+        --icon 'assets\app.ico' `
         --add-data 'models;models' `
+        --add-data 'assets\app.ico;assets' `
         auto_mosaic\app.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE."

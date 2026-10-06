@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QImage,
+    QIcon,
     QKeySequence,
     QMouseEvent,
     QPainter,
@@ -234,6 +235,7 @@ class AutoMosaicWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(str(resource_root() / "assets" / "app.ico")))
         self.resize(1260, 790)
         self.setMinimumSize(980, 650)
         self.setAcceptDrops(True)
@@ -1568,6 +1570,8 @@ def run() -> None:
     if not smoke_test:
         window.show()
     if smoke_test:
+        if window.windowIcon().isNull():
+            raise FileNotFoundError("Packaged application icon is missing")
         missing = [path for path in required_model_paths(window.model_dir) if not path.exists()]
         if missing:
             raise FileNotFoundError(f"Packaged models are missing: {missing}")

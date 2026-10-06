@@ -1,0 +1,8 @@
+{
+  "tool": "built-in image_gen",
+  "brief": "黄色いスタンプ風の手。中指は一本だけまっすぐ立て、余分な曲がった中指を描かない。モザイクは輪郭線も潰すように指の外側までかける。",
+  "final_edit_prompt": "Make a precise anatomical correction to this yellow emoji hand icon. KEEP the existing yellow emoji style, existing coarse pixel mosaic on the raised middle finger, other fingers, thumb, wrist, colors, composition and transparent background. REMOVE the spurious curled-middle-finger lobe directly beneath the mosaic: in the center of the fist, immediately LEFT of the horizontal thumb and RIGHT of the tall curled ring finger, there is a narrow yellow U-shaped segment outlined in dark orange, approximately x=570..655 y=635..770 in this 1254-square reference. Erase that extra U-shaped orange outline and merge its yellow interior seamlessly into the palm. This area is the straight base of the raised middle finger, NOT a curled finger; there must be NO rounded fingertip, U-shape, small orange hook, duplicate finger or dividing line here. The middle finger must connect seamlessly straight into the palm behind the thumb. Keep ONLY the two curled fingers on the left and one curled index finger at the upper right behind the thumb; the thumb is the horizontal form on the right. Keep the mosaic covering and breaking the raised finger's entire outline with chunky square edges. Do not change anything else. Transparent background.",
+  "source": "app-icon.png",
+  "generated_ico": "app.ico",
+  "build_command": ".venv/Scripts/python.exe scripts/build_icon.py"
+}

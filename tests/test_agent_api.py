@@ -275,7 +275,7 @@ class AgentApiTests(unittest.TestCase):
         overlay, _ = self.decoded("/preview?view=mask_overlay")
         expected = self.window.preview_rgb[:, :, ::-1]
         self.assertTrue(np.array_equal(overlay, expected))
-        self.assertEqual(self.window.preview_mode_combo.currentText(), "マスク範囲")
+        self.assertEqual(self.window.preview_mode(), "マスク範囲")
         output = self.root / "任意の名前.png"
         job = self.call("image.save", path=str(output))
         self.assertEqual(job["result"]["outputs"], [str(output)])

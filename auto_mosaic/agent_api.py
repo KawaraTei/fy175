@@ -243,7 +243,7 @@ class AgentController:
         while len(self.undo_history) > 1 and (len(self.undo_history) > 20 or sum(sum(len(b) for b in entry[1]) for entry in self.undo_history) > 128 * 1024 * 1024):
             self.undo_history.popleft()
         if not w.mask_edit_active:
-            w.preview_mode_combo.setCurrentText("マスク範囲")
+            w.set_preview_mode("マスク範囲")
             w._toggle_mask_edit()
         w.edited_mask = candidate
         self.edit_detection_masks = [item & candidate for item in (previous_owned if owned is None else owned)]
@@ -403,8 +403,8 @@ class AgentController:
                   "manual_review_paths": [str(path) for path in w.manual_review_paths],
                   "settings": self._settings("image"), "editing": w.mask_edit_active,
                   "mask_dirty": w.mask_edit_dirty,
-                  "preview_view": next(key for key, label in VIEWS.items() if label == w.preview_mode_combo.currentText()),
-                  "preview_view_text": w.preview_mode_combo.currentText(),
+                  "preview_view": next(key for key, label in VIEWS.items() if label == w.preview_mode()),
+                  "preview_view_text": w.preview_mode(),
                   "undo_depth": len(self.undo_history) if w.mask_edit_active else 0, "last_error": self.last_error},
                   "notifications": list(self.notifications), "active_jobs": [dict(job) for job in self.active.values()]}
         if w.current_result is not None:
@@ -675,7 +675,7 @@ class AgentController:
             image = mask.astype(np.uint8) * 255
         elif image is None:
             if workspace == "image":
-                w.preview_mode_combo.setCurrentText(VIEWS[view])
+                w.set_preview_mode(VIEWS[view])
                 if view == "result":
                     original = w.mask_edit_original_bgr if w.mask_edit_active else load_image_bgr(w._selected_path())
                     image = apply_effect(original, mask, w._settings().effect, w._settings().effect_size)

@@ -77,7 +77,7 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
             assert received[-1].mask_threshold == 1.5
             assert received[-1].mask_expansion == 0
             assert received[-1].confidence_threshold == 0.25
-            window.preview_mode_combo.setCurrentText("検出範囲")
+            window.set_preview_mode("検出範囲")
             QTest.mouseClick(window.mask_edit_button, Qt.MouseButton.LeftButton)
             assert window.mask_edit_active
             assert not window.mask_threshold_spin.isEnabled()
@@ -254,15 +254,20 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert window.image_paths == [first.resolve(), second.resolve()]
         assert window.current_result is not None
         assert window.current_result.source_path == first.resolve()
-        assert window.preview_mode_combo.currentText() == "処理結果"
+        assert window.preview_mode() == "処理結果"
+        assert window.brush_size_slider.value() == 20
+        assert window.brush_size_slider.maximum() == 100
+        assert window.brush_size_value.text() == "20 px"
         assert window.suffix_edit.text() == "_mosaic"
         assert window.process_current_button.text() == "表示中の1枚を処理して保存"
         assert not window.remove_after_process_check.isChecked()
         assert window.list_splitter.orientation() == Qt.Orientation.Vertical
         assert window.list_splitter.count() == 2
 
-        for preview_mode in ("元画像", "検出範囲", "処理結果"):
-            window.preview_mode_combo.setCurrentText(preview_mode)
+        for preview_mode in ("元画像", "検出範囲", "マスク範囲", "処理結果"):
+            QTest.mouseClick(window.preview_mode_buttons[preview_mode], Qt.MouseButton.LeftButton)
+            assert window.preview_mode() == preview_mode
+            assert sum(button.isChecked() for button in window.preview_mode_buttons.values()) == 1
             app.processEvents()
             initial_width = window.preview_image_rect.width()
             _send_wheel(
@@ -279,7 +284,7 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
             )
             assert window.preview_zoom_index == 0
 
-        window.preview_mode_combo.setCurrentText("検出範囲")
+        window.set_preview_mode("検出範囲")
         app.processEvents()
         assert window.preview_rgb is not None
         assert np.any(window.preview_rgb != first_pixels)
@@ -290,7 +295,7 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert window.preview_rgb is not None
         assert np.array_equal(window.preview_rgb, first_pixels)
         assert window.preview_label.mask_editing
-        assert window.preview_mode_combo.isEnabled()
+        assert all(button.isEnabled() for button in window.preview_mode_buttons.values())
         assert not window.process_button.isEnabled()
         assert window.process_current_button.isEnabled()
         assert not window.brush_size_slider.isHidden()
@@ -335,7 +340,7 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert np.any(window.edited_mask)
 
         edited_before_preview_switch = window.edited_mask.copy()
-        window.preview_mode_combo.setCurrentText("処理結果")
+        window.set_preview_mode("処理結果")
         app.processEvents()
         assert window.mask_edit_active
         assert not window.preview_label.mask_editing
@@ -345,7 +350,7 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert np.any(window.preview_rgb != first_pixels)
         result_border = window.preview_label.pixmap().toImage().pixelColor(2, 2)
         assert result_border.red() > 200
-        window.preview_mode_combo.setCurrentText("検出範囲")
+        window.set_preview_mode("検出範囲")
         app.processEvents()
         assert window.mask_edit_active
         assert window.preview_label.mask_editing

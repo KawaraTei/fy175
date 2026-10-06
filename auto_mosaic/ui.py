@@ -21,6 +21,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -333,21 +334,28 @@ class AutoMosaicWindow(QMainWindow):
         preview_bar.setObjectName("previewBar")
         preview_bar_layout = QHBoxLayout(preview_bar)
         preview_bar_layout.setContentsMargins(10, 8, 10, 8)
-        preview_bar_layout.addWidget(QLabel("表示"))
-        self.preview_mode_combo = QComboBox()
-        self.preview_mode_combo.addItems(list(PREVIEW_VIEWS.values()))
-        self.preview_mode_combo.setCurrentText("処理結果")
-        self.preview_mode_combo.currentTextChanged.connect(self._on_preview_mode_changed)
-        preview_bar_layout.addWidget(self.preview_mode_combo)
+        preview_bar_layout.setSpacing(4)
+        self.preview_mode_group = QButtonGroup(self)
+        self.preview_mode_buttons: dict[str, QPushButton] = {}
+        for label in PREVIEW_VIEWS.values():
+            button = QPushButton(label)
+            button.setObjectName("previewMode")
+            button.setCheckable(True)
+            self.preview_mode_group.addButton(button)
+            self.preview_mode_buttons[label] = button
+            preview_bar_layout.addWidget(button, 1)
+        self.preview_mode_buttons["処理結果"].setChecked(True)
+        self.preview_mode_group.buttonClicked.connect(
+            lambda button: self._on_preview_mode_changed(button.text())
+        )
         self.mask_edit_button = self._button("マスクを編集", self._toggle_mask_edit)
         self.mask_edit_button.setEnabled(False)
-        preview_bar_layout.addWidget(self.mask_edit_button)
         self.brush_size_label = QLabel("ブラシ")
         self.brush_size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brush_size_slider.setRange(4, 200)
-        self.brush_size_slider.setValue(40)
+        self.brush_size_slider.setRange(4, 100)
+        self.brush_size_slider.setValue(20)
         self.brush_size_slider.setFixedWidth(100)
-        self.brush_size_value = QLabel("40 px")
+        self.brush_size_value = QLabel(f"{self.brush_size_slider.value()} px")
         self.brush_size_value.setObjectName("value")
         self.brush_size_slider.valueChanged.connect(self._on_brush_size_changed)
         for widget in (
@@ -356,10 +364,7 @@ class AutoMosaicWindow(QMainWindow):
             self.brush_size_value,
         ):
             widget.setVisible(False)
-            preview_bar_layout.addWidget(widget)
-        preview_bar_layout.addStretch(1)
         self.analyze_button = self._button("この画像を再解析", self._analyze_current)
-        preview_bar_layout.addWidget(self.analyze_button)
         center_layout.addWidget(preview_bar)
         body_layout.addWidget(center, 0, 1)
 
@@ -440,6 +445,16 @@ class AutoMosaicWindow(QMainWindow):
         mask_hint.setObjectName("muted")
         mask_hint.setWordWrap(True)
         right_layout.addWidget(mask_hint)
+        right_layout.addWidget(self.analyze_button)
+        right_layout.addWidget(self.mask_edit_button)
+        brush_row = QHBoxLayout()
+        for widget in (
+            self.brush_size_label,
+            self.brush_size_slider,
+            self.brush_size_value,
+        ):
+            brush_row.addWidget(widget)
+        right_layout.addLayout(brush_row)
         right_layout.addSpacing(8)
 
         right_layout.addWidget(self._section_label("処理方法"))
@@ -527,6 +542,10 @@ class AutoMosaicWindow(QMainWindow):
             QPushButton { background: #356b92; color: white; border: none; border-radius: 3px; padding: 7px 12px; }
             QPushButton:hover { background: #4f89b2; }
             QPushButton:disabled { background: #3a3d45; color: #858993; }
+            QPushButton#previewMode { background: #292e38; border: 1px solid #49515f; padding: 6px; }
+            QPushButton#previewMode:hover { background: #3b4655; }
+            QPushButton#previewMode:checked { background: #356b92; border: 1px solid #75c5ff; font-weight: 600; }
+            QPushButton#previewMode:disabled { background: #3a3d45; color: #858993; }
             QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
             QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
             QListWidget::item { padding: 5px; }
@@ -710,6 +729,15 @@ class AutoMosaicWindow(QMainWindow):
             generation = self.analysis_generation
             QTimer.singleShot(0, lambda: self._start_analysis(generation, False))
 
+    def preview_mode(self) -> str:
+        return self.preview_mode_group.checkedButton().text()
+
+    def set_preview_mode(self, label: str) -> None:
+        button = self.preview_mode_buttons[label]
+        if not button.isChecked():
+            button.setChecked(True)
+            self._on_preview_mode_changed(label)
+
     def _on_preview_mode_changed(self, _value: str) -> None:
         self._update_mask_editor_interaction()
         self._update_mask_edit_controls()
@@ -724,7 +752,7 @@ class AutoMosaicWindow(QMainWindow):
         self._on_effect_settings_changed()
 
     def _on_effect_settings_changed(self, _value=None) -> None:
-        if self.mask_edit_active and self.preview_mode_combo.currentText() == "処理結果":
+        if self.mask_edit_active and self.preview_mode() == "処理結果":
             self._refresh_preview()
 
     def _toggle_mask_edit(self) -> None:
@@ -736,7 +764,7 @@ class AutoMosaicWindow(QMainWindow):
             path is None
             or self.current_result is None
             or self.current_result.source_path != path
-            or self.preview_mode_combo.currentText() not in {"検出範囲", "マスク範囲"}
+            or self.preview_mode() not in {"検出範囲", "マスク範囲"}
         ):
             return
         self.mask_edit_active = True
@@ -787,7 +815,7 @@ class AutoMosaicWindow(QMainWindow):
             not self.busy
             and self.current_result is not None
             and self.current_result.source_path == path
-            and self.preview_mode_combo.currentText() in {"検出範囲", "マスク範囲"}
+            and self.preview_mode() in {"検出範囲", "マスク範囲"}
         )
         self.mask_edit_button.setText(
             "編集を終了（破棄）" if self.mask_edit_active else "マスクを編集"
@@ -801,7 +829,8 @@ class AutoMosaicWindow(QMainWindow):
             self.brush_size_value,
         ):
             widget.setVisible(self.mask_edit_active)
-        self.preview_mode_combo.setEnabled(not self.busy)
+        for button in self.preview_mode_buttons.values():
+            button.setEnabled(not self.busy)
         self.mode_combo.setEnabled(not self.mask_edit_active and not self.busy)
         self.penis_check.setEnabled(not self.mask_edit_active and not self.busy)
         self.vagina_check.setEnabled(not self.mask_edit_active and not self.busy)
@@ -816,7 +845,7 @@ class AutoMosaicWindow(QMainWindow):
         self.preview_label.set_mask_editing(
             self.mask_edit_active
             and not self.busy
-            and self.preview_mode_combo.currentText() in {"検出範囲", "マスク範囲"}
+            and self.preview_mode() in {"検出範囲", "マスク範囲"}
         )
         self.preview_label.set_zoom_enabled(self.preview_rgb is not None)
         self._update_brush_display_size()
@@ -1055,7 +1084,7 @@ class AutoMosaicWindow(QMainWindow):
         path = self._selected_path()
         if path is None:
             return
-        mode = self.preview_mode_combo.currentText()
+        mode = self.preview_mode()
         if mode == "元画像" or self.current_result is None:
             self._show_original(path)
         elif mode in {"検出範囲", "マスク範囲"}:
@@ -1242,7 +1271,7 @@ class AutoMosaicWindow(QMainWindow):
                         continue
                     if self._selected_path() == result.source_path:
                         self.current_result = result
-                        self.preview_mode_combo.setCurrentText("処理結果")
+                        self.set_preview_mode("処理結果")
                         self._refresh_preview()
                     detail = f"{len(result.detections)}件検出"
                     if result.used_box_fallbacks:
@@ -1276,7 +1305,7 @@ class AutoMosaicWindow(QMainWindow):
                         self._end_mask_edit(refresh_preview=False)
                     if not remove_after and self._selected_path() == result.source_path:
                         self.current_result = result
-                        self.preview_mode_combo.setCurrentText("処理結果")
+                        self.set_preview_mode("処理結果")
                         self._refresh_preview()
                     self._set_busy(False, f"{output.name}を書き出しました")
                     if remove_after:

@@ -523,6 +523,15 @@ class AutoMosaicWindow(QMainWindow):
         self.process_current_button = self._button("表示中の1枚を処理して保存", self._process_current)
         self.process_current_button.setMinimumHeight(36)
         actions_layout.addWidget(self.process_current_button)
+        actions_layout.addSpacing(7)
+        self.copy_current_button = self._button("表示中の1枚を処理せず保存", self._copy_current)
+        self.copy_current_button.setObjectName("copyCurrent")
+        self.copy_current_button.setMinimumHeight(36)
+        self.copy_current_button.setToolTip(
+            "元ファイルをそのままコピーします。出力suffixは付けず、同名ファイルがある場合は連番を付けます。"
+        )
+        actions_layout.addWidget(self.copy_current_button)
+        actions_layout.addSpacing(24)
         self.process_button = self._button("すべて処理して保存", self._process_all)
         self.process_button.setMinimumHeight(42)
         actions_layout.addWidget(self.process_button)
@@ -546,6 +555,8 @@ class AutoMosaicWindow(QMainWindow):
             QPushButton#previewMode:hover { background: #3b4655; }
             QPushButton#previewMode:checked { background: #356b92; border: 1px solid #75c5ff; font-weight: 600; }
             QPushButton#previewMode:disabled { background: #3a3d45; color: #858993; }
+            QPushButton#copyCurrent:enabled { background: #9bafbd; color: #17232d; }
+            QPushButton#copyCurrent:enabled:hover { background: #b3c4cf; }
             QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
             QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
             QListWidget::item { padding: 5px; }
@@ -839,6 +850,7 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_expansion_spin.setEnabled(not self.mask_edit_active and not self.busy)
         self.analyze_button.setEnabled(not self.mask_edit_active and not self.busy)
         self.process_current_button.setEnabled(not self.busy)
+        self.copy_current_button.setEnabled(not self.busy)
         self.process_button.setEnabled(not self.mask_edit_active and not self.busy)
 
     def _update_mask_editor_interaction(self) -> None:
@@ -956,6 +968,25 @@ class AutoMosaicWindow(QMainWindow):
 
     def _process_current(self) -> None:
         self._save_current()
+
+    def _copy_current(self) -> None:
+        if self.busy:
+            return
+        path = self._selected_path()
+        if path is None:
+            QMessageBox.information(self, APP_NAME, "画像を選択してください。")
+            return
+        output_dir = Path(self.output_edit.text())
+        self._set_busy(True, f"{path.name}をコピーしています…")
+
+        def work() -> None:
+            try:
+                output = self.pipeline.copy_original(path, output_dir)
+                self.events.put(("copy_complete", output))
+            except Exception as error:
+                self.events.put(("error", error))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _save_current(self, output_path: Path | None = None) -> None:
         path = self._selected_path()
@@ -1299,6 +1330,10 @@ class AutoMosaicWindow(QMainWindow):
                         "完了",
                         f"{len(outputs)}件を次のフォルダへ保存しました。\n{self.output_edit.text()}",
                     )
+                elif kind == "copy_complete":
+                    output = payload
+                    self._set_busy(False, f"{output.name}をコピーしました")
+                    self._notice("information", "完了", f"コピーしました。\n{output}")
                 elif kind == "single_complete":
                     result, output, remove_after, used_edited_mask = payload  # type: ignore[misc]
                     if used_edited_mask:

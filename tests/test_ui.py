@@ -140,6 +140,81 @@ def test_preview_wheel_zoom_uses_cursor_or_image_center_anchor() -> None:
     window.close()
 
 
+def test_copy_current_preserves_original_without_processing() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = AutoMosaicWindow()
+    try:
+        with TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            source = folder / "sample.JPG"
+            Image.new("RGB", (12, 8), (20, 80, 160)).save(source)
+            original_bytes = source.read_bytes()
+            window.image_paths = [source]
+            window.file_list.blockSignals(True)
+            window.file_list.addItem(source.name)
+            window.file_list.setCurrentRow(0)
+            window.file_list.blockSignals(False)
+            window.output_edit.setText(str(folder / "output"))
+            window.suffix_edit.setText("invalid/suffix")
+            window.penis_check.setChecked(False)
+            window.vagina_check.setChecked(False)
+            window.remove_after_process_check.setChecked(True)
+            window.current_result = ProcessingResult(
+                source, load_image_bgr(source), np.ones((8, 12), dtype=bool)
+            )
+            window.set_preview_mode("検出範囲")
+            window._toggle_mask_edit()
+            window.mask_edit_dirty = True
+            result = window.current_result
+            edited_mask = window.edited_mask.copy()
+
+            def wait_for_copy():
+                deadline = monotonic() + 3.0
+                while window.busy and monotonic() < deadline:
+                    app.processEvents()
+                    window._poll_events()
+                    sleep(0.01)
+                assert not window.busy
+
+            with patch.object(window.pipeline, "analyze") as analyze, patch.object(
+                window.pipeline, "process_with_mask"
+            ) as process, patch.object(window.pipeline, "save") as save, patch.object(
+                window, "_notice"
+            ) as notice:
+                window.copy_current_button.click()
+                assert not window.copy_current_button.isEnabled()
+                wait_for_copy()
+                output = folder / "output" / source.name
+                assert output.read_bytes() == original_bytes
+                window.copy_current_button.click()
+                wait_for_copy()
+                assert (output.parent / "sample_2.JPG").read_bytes() == original_bytes
+                assert output.read_bytes() == original_bytes
+                # A source folder used as the output must not overwrite the source.
+                window.output_edit.setText(str(folder))
+                window.copy_current_button.click()
+                wait_for_copy()
+                assert (folder / "sample_2.JPG").read_bytes() == original_bytes
+                assert source.read_bytes() == original_bytes
+                assert window.current_result is result
+                assert window.mask_edit_active and window.mask_edit_dirty
+                assert np.array_equal(window.edited_mask, edited_mask)
+                assert window.image_paths == [source]
+                analyze.assert_not_called()
+                process.assert_not_called()
+                save.assert_not_called()
+                assert notice.call_args.args[0] == "information"
+                # A failed copy reports an error and re-enables the action.
+                window.output_edit.setText(str(source))
+                window.copy_current_button.click()
+                wait_for_copy()
+                assert notice.call_args.args[0] == "critical"
+                assert window.copy_current_button.isEnabled()
+    finally:
+        window._end_mask_edit(refresh_preview=False)
+        window.close()
+
+
 def test_open_output_folder_button_creates_and_reveals_folder() -> None:
     app = QApplication.instance() or QApplication([])
     window = AutoMosaicWindow()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from threading import Lock
 
@@ -127,6 +128,17 @@ class MosaicPipeline:
             output_path = output_dir / f"{output_stem}_{sequence}{extension}"
             sequence += 1
         save_image_bgr(output_path, result.image_bgr)
+        return output_path
+
+    @staticmethod
+    def copy_original(source_path: Path, output_dir: Path) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / source_path.name
+        sequence = 2
+        while output_path.exists():
+            output_path = output_dir / f"{source_path.stem}_{sequence}{source_path.suffix}"
+            sequence += 1
+        shutil.copy2(source_path, output_path)
         return output_path
 
     def process_with_mask(

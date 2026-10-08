@@ -24,6 +24,7 @@ from auto_mosaic.model_catalog import (
     detector_for,
 )
 from auto_mosaic.segmenter import Sam2OnnxSegmenter
+from auto_mosaic.sidecar import load_sidecar
 
 
 BELOW_THRESHOLD_PREVIEW_LIMIT = 5
@@ -35,6 +36,21 @@ class MosaicPipeline:
         self._detectors: dict[ImageMode, YoloOnnxDetector] = {}
         self._segmenter: Sam2OnnxSegmenter | None = None
         self._lock = Lock()
+
+    def restore(self, path: Path, settings: ProcessingSettings | None = None, *, sidecar_file: Path | None = None
+                ) -> tuple[ProcessingResult, ProcessingSettings] | None:
+        saved = load_sidecar(path, sidecar_file=sidecar_file)
+        if saved is None:
+            return None
+        mask, saved_settings, detections, owned = saved
+        result = self.process_with_mask(path, mask, settings or saved_settings,
+                                        detections, detection_masks=owned)
+        result.restored_from_sidecar = True
+        return result, saved_settings
+
+    def prepare(self, path: Path, settings: ProcessingSettings) -> ProcessingResult:
+        restored = self.restore(path, settings)
+        return restored[0] if restored is not None else self.analyze(path, settings)
 
     def analyze(self, path: Path, settings: ProcessingSettings) -> ProcessingResult:
         with self._lock:

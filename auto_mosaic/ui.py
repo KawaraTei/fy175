@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from auto_mosaic.domain import EffectType, ImageMode, PREVIEW_VIEWS, ProcessingResult, ProcessingSettings
+from auto_mosaic.domain import EffectType, ImageMode, PREVIEW_VIEWS, PROCESSING_RANGES, ProcessingResult, ProcessingSettings
 from auto_mosaic.image_ops import (
     apply_effect,
     load_image_bgr,
@@ -58,6 +58,7 @@ from auto_mosaic.image_ops import (
 )
 from auto_mosaic.model_catalog import required_model_paths
 from auto_mosaic.pipeline import MosaicPipeline
+from auto_mosaic.sidecar import save_sidecar, sidecar_path
 
 
 APP_NAME = "FY175AutoMosaic"
@@ -292,6 +293,18 @@ class AutoMosaicWindow(QMainWindow):
             self._button("選択を除去（メモ）", self._remove_selected_to_manual)
         )
         toolbar_layout.addWidget(self._button("すべて消去", self._clear_images))
+        toolbar_layout.addSpacing(12)
+        self.restore_sidecar_button = self._button("マスク復元", lambda: self._restore_mask_settings())
+        self.restore_sidecar_button.setObjectName("restoreMask")
+        self.restore_sidecar_button.setFixedHeight(26)
+        self.restore_sidecar_button.setToolTip(
+            "保存したマスク範囲とモザイク／ぼかし設定を読み込みます。\n"
+            "元画像の隣に.fyがあればすぐ復元し、なければファイル選択画面を開きます。\n"
+            "保存時と同じ元画像にのみ復元できます。未保存の編集は置き換え前に確認します。\n"
+            "元画像を開くときも、隣の.fyを自動で読み込みます。"
+        )
+        self.restore_sidecar_button.setEnabled(False)
+        toolbar_layout.addWidget(self.restore_sidecar_button)
         toolbar_layout.addStretch(1)
         self.status_label = QLabel("画像を追加してください")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -432,7 +445,7 @@ class AutoMosaicWindow(QMainWindow):
         self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_layout.addWidget(self.threshold_value)
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
-        self.threshold_slider.setRange(5, 95)
+        self.threshold_slider.setRange(*(round(v * 100) for v in PROCESSING_RANGES["confidence_threshold"][:2]))
         self.threshold_slider.setValue(25)
         self.threshold_slider.valueChanged.connect(
             lambda value: self.threshold_value.setText(f"{value / 100:.2f}")
@@ -445,7 +458,7 @@ class AutoMosaicWindow(QMainWindow):
         mask_threshold_row.addWidget(mask_threshold_label)
         mask_threshold_row.addStretch(1)
         self.mask_threshold_spin = QDoubleSpinBox()
-        self.mask_threshold_spin.setRange(-10.0, 10.0)
+        self.mask_threshold_spin.setRange(*PROCESSING_RANGES["mask_threshold"][:2])
         self.mask_threshold_spin.setDecimals(1)
         self.mask_threshold_spin.setSingleStep(0.5)
         self.mask_threshold_spin.setValue(ProcessingSettings.mask_threshold)
@@ -466,7 +479,7 @@ class AutoMosaicWindow(QMainWindow):
         mask_expansion_row.addWidget(mask_expansion_label)
         mask_expansion_row.addStretch(1)
         self.mask_expansion_spin = QSpinBox()
-        self.mask_expansion_spin.setRange(0, 20)
+        self.mask_expansion_spin.setRange(*PROCESSING_RANGES["mask_expansion"][:2])
         self.mask_expansion_spin.setSuffix(" px")
         self.mask_expansion_spin.setValue(ProcessingSettings.mask_expansion)
         self.mask_expansion_spin.setKeyboardTracking(False)
@@ -508,7 +521,7 @@ class AutoMosaicWindow(QMainWindow):
         size_row.addWidget(self.effect_size_value)
         right_layout.addLayout(size_row)
         self.effect_size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.effect_size_slider.setRange(4, 64)
+        self.effect_size_slider.setRange(*PROCESSING_RANGES["effect_size"][:2])
         self.effect_size_slider.setValue(16)
         self.effect_size_slider.valueChanged.connect(self._on_effect_size_changed)
         right_layout.addWidget(self.effect_size_slider)
@@ -556,8 +569,21 @@ class AutoMosaicWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
         actions_layout.addWidget(self.progress)
+        self.save_sidecar_check = QCheckBox(".fy保存")
+        self.save_sidecar_check.setAccessibleName("マスクと設定を.fyに保存")
+        self.save_sidecar_check.setToolTip(
+            "「処理して保存」時に、マスク範囲とモザイク／ぼかし設定を保存します。\n"
+            "保存先は元画像と同じフォルダです（例：sample.png.fy）。一括保存も対象です。\n"
+            "チェックを付けるだけでは保存されません。既存の.fyは更新します。\n"
+            "元画像を開き直すと自動復元し、範囲を保ったまま設定を変更できます。"
+        )
         self.remove_after_process_check = QCheckBox("処理後にリストから除去")
-        actions_layout.addWidget(self.remove_after_process_check)
+        save_options = QHBoxLayout()
+        save_options.setSpacing(6)
+        save_options.addWidget(self.remove_after_process_check)
+        save_options.addStretch(1)
+        save_options.addWidget(self.save_sidecar_check)
+        actions_layout.addLayout(save_options)
         self.process_current_button = self._button("表示中の1枚を処理して保存", self._process_current)
         self.process_current_button.setMinimumHeight(36)
         actions_layout.addWidget(self.process_current_button)
@@ -595,6 +621,9 @@ class AutoMosaicWindow(QMainWindow):
             QPushButton#previewMode:disabled { background: #3a3d45; color: #858993; }
             QPushButton#copyCurrent:enabled { background: #9bafbd; color: #17232d; }
             QPushButton#copyCurrent:enabled:hover { background: #b3c4cf; }
+            QPushButton#restoreMask { padding: 3px 8px; }
+            QPushButton#restoreMask:enabled { background: #292e38; color: #bbc2cd; }
+            QPushButton#restoreMask:enabled:hover { background: #3b4655; }
             QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
             QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
             QListWidget::item { padding: 5px; }
@@ -776,7 +805,7 @@ class AutoMosaicWindow(QMainWindow):
             self._show_original(next_path)
             self.analysis_generation += 1
             generation = self.analysis_generation
-            QTimer.singleShot(0, lambda: self._start_analysis(generation, False))
+            QTimer.singleShot(0, lambda: self._start_analysis(generation, False, restore_saved=True))
 
     def preview_mode(self) -> str:
         return self.preview_mode_group.checkedButton().text()
@@ -801,6 +830,15 @@ class AutoMosaicWindow(QMainWindow):
         self._on_effect_settings_changed()
 
     def _on_effect_settings_changed(self, _value=None) -> None:
+        if (not self.mask_edit_active and self.current_result is not None
+                and self.current_result.restored_from_sidecar):
+            reference = self.current_result
+            reference.image_bgr = apply_effect(
+                load_image_bgr(reference.source_path), reference.mask,
+                EffectType.MOSAIC if self.effect_combo.currentText() == "モザイク" else EffectType.BLUR,
+                self.effect_size_slider.value(),
+            )
+            self._refresh_preview()
         if self.mask_edit_active and self.preview_mode() == "処理結果":
             self._refresh_preview()
 
@@ -900,6 +938,8 @@ class AutoMosaicWindow(QMainWindow):
         self.process_current_button.setEnabled(not self.busy)
         self.copy_current_button.setEnabled(not self.busy)
         self.process_button.setEnabled(not self.mask_edit_active and not self.busy)
+        self.save_sidecar_check.setEnabled(not self.busy)
+        self.restore_sidecar_button.setEnabled(path is not None and not self.busy)
         self.mask_undo_shortcut.setEnabled(
             self.mask_edit_active and not self.busy
             and not self._mask_stroke_active and bool(self.mask_undo_history)
@@ -1037,7 +1077,7 @@ class AutoMosaicWindow(QMainWindow):
         self.analysis_generation += 1
         self._start_analysis(self.analysis_generation, True)
 
-    def _start_analysis(self, generation: int, report_errors: bool) -> None:
+    def _start_analysis(self, generation: int, report_errors: bool, *, restore_saved: bool = False) -> None:
         if generation != self.analysis_generation:
             return
         path = self._selected_path()
@@ -1048,19 +1088,29 @@ class AutoMosaicWindow(QMainWindow):
         try:
             settings = self._settings()
         except ValueError as error:
-            if report_errors:
-                QMessageBox.warning(self, "設定", str(error))
+            if restore_saved:
+                settings = None
             else:
-                self.status_label.setText(str(error))
-            return
+                if report_errors:
+                    QMessageBox.warning(self, "設定", str(error))
+                else:
+                    self.status_label.setText(str(error))
+                return
         self._set_busy(True, "解析しています…")
 
         def work() -> None:
             try:
+                if restore_saved:
+                    restored = self.pipeline.restore(path)
+                    if restored is not None:
+                        self.events.put(("restored", (generation, *restored)))
+                        return
+                if settings is None:
+                    raise ValueError("検出対象を1つ以上選択してください。")
                 result = self.pipeline.analyze(path, settings)
                 self.events.put(("analysis", (generation, result)))
             except Exception as error:
-                self.events.put(("analysis_error", (generation, error, report_errors)))
+                self.events.put(("analysis_error", (generation, error, report_errors or restore_saved)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1074,6 +1124,79 @@ class AutoMosaicWindow(QMainWindow):
 
     def _process_current(self) -> None:
         self._save_current()
+
+    def _restore_settings(self, settings: ProcessingSettings) -> None:
+        values = (
+            (self.mode_combo, "setCurrentText", "実写" if settings.mode == ImageMode.PHOTO else "イラスト"),
+            (self.penis_check, "setChecked", "penis" in settings.targets),
+            (self.vagina_check, "setChecked", "vagina" in settings.targets),
+            (self.threshold_slider, "setValue", round(settings.confidence_threshold * 100)),
+            (self.mask_threshold_spin, "setValue", settings.mask_threshold),
+            (self.mask_expansion_spin, "setValue", settings.mask_expansion),
+            (self.effect_combo, "setCurrentText", "モザイク" if settings.effect == EffectType.MOSAIC else "ぼかし"),
+            (self.effect_size_slider, "setValue", settings.effect_size),
+        )
+        for widget, setter, value in values:
+            previous = widget.blockSignals(True)
+            getattr(widget, setter)(value)
+            widget.blockSignals(previous)
+        self.threshold_value.setText(f"{settings.confidence_threshold:.2f}")
+        self.effect_size_value.setText(f"{settings.effect_size} px")
+
+    def _save_mask_settings(self) -> None:
+        if self.busy or self.current_result is None or self.current_result.source_path != self._selected_path():
+            return
+        try:
+            settings = self._settings()
+            reference = self.current_result
+            mask = (self.edited_mask if self.mask_edit_active else reference.mask).copy()
+            owned = [item.copy() for item in (
+                self.edit_detection_masks if self.mask_edit_active else reference.detection_masks
+            ) or []]
+        except Exception as error:
+            self._notice("critical", "マスクと設定の保存", str(error))
+            return
+        self._set_busy(True, "マスクと設定を保存しています…")
+
+        def work() -> None:
+            try:
+                result = self.pipeline.process_with_mask(
+                    reference.source_path, mask, settings, reference.detections,
+                    detection_masks=owned,
+                )
+                output = save_sidecar(result, settings)
+                self.events.put(("sidecar_complete", (result, output)))
+            except Exception as error:
+                self.events.put(("error", error))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _restore_mask_settings(self, sidecar_file: Path | None = None) -> None:
+        if self.busy:
+            return
+        path = self._selected_path()
+        if path is None:
+            return
+        target = sidecar_file if sidecar_file is not None else sidecar_path(path)
+        if sidecar_file is None and not target.exists():
+            selected, _ = QFileDialog.getOpenFileName(
+                self, "マスクと設定を復元", str(path.parent), "FYファイル (*.fy)",
+            )
+            if not selected:
+                return
+            target = Path(selected)
+        self.analysis_generation += 1
+        generation = self.analysis_generation
+        self._set_busy(True, "マスクと設定を復元しています…")
+
+        def work() -> None:
+            try:
+                restored = self.pipeline.restore(path, sidecar_file=target)
+                self.events.put(("restored", (generation, *restored)))
+            except Exception as error:
+                self.events.put(("restore_error", (generation, error)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _copy_current(self) -> None:
         if self.busy:
@@ -1095,6 +1218,8 @@ class AutoMosaicWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _save_current(self, output_path: Path | None = None) -> None:
+        if self.busy:
+            return
         path = self._selected_path()
         if path is None:
             QMessageBox.information(self, APP_NAME, "画像を選択してください。")
@@ -1107,6 +1232,11 @@ class AutoMosaicWindow(QMainWindow):
             return
         output_dir = Path(self.output_edit.text())
         remove_after = self.remove_after_process_check.isChecked()
+        save_mask_settings = self.save_sidecar_check.isChecked()
+        needs_prepare = self.current_result is None or self.current_result.source_path != path
+        restored_reference = (self.current_result if self.current_result is not None
+                              and self.current_result.restored_from_sidecar
+                              and self.current_result.source_path == path else None)
         edited_mask = self.edited_mask.copy() if self.mask_edit_active else None
         edit_reference = self.current_result if self.mask_edit_active else None
         edited_owned = self.edit_detection_masks
@@ -1131,14 +1261,26 @@ class AutoMosaicWindow(QMainWindow):
                         edit_reference.below_threshold_detections,
                         edited_owned if edited_owned is not None else edit_reference.detection_masks,
                     )
+                elif restored_reference is not None:
+                    result = self.pipeline.process_with_mask(
+                        path, restored_reference.mask, settings, restored_reference.detections,
+                        detection_masks=restored_reference.detection_masks,
+                    )
+                    result.restored_from_sidecar = True
                 else:
-                    result = self.pipeline.analyze(path, settings)
+                    result = (self.pipeline.prepare(path, settings) if needs_prepare
+                              else self.pipeline.analyze(path, settings))
                 output = (self.pipeline.save(result, output_dir, filename_suffix, output_path=output_path)
                           if output_path is not None else self.pipeline.save(result, output_dir, filename_suffix))
+                if save_mask_settings:
+                    try:
+                        save_sidecar(result, settings)
+                    except Exception as error:
+                        raise OSError(f"画像は保存済みです: {output}\n.fyの保存に失敗しました: {error}") from error
                 self.events.put(
                     (
                         "single_complete",
-                        (result, output, remove_after, edited_mask is not None),
+                        (result, output, remove_after, edited_mask is not None, save_mask_settings),
                     )
                 )
             except Exception as error:
@@ -1166,18 +1308,26 @@ class AutoMosaicWindow(QMainWindow):
         output_dir = Path(self.output_edit.text())
         paths = list(self.image_paths)
         remove_after = self.remove_after_process_check.isChecked()
+        save_mask_settings = self.save_sidecar_check.isChecked()
         self._set_busy(True, "一括処理を開始します…")
 
         def work() -> None:
             outputs: list[Path] = []
             completed_paths: list[Path] = []
+            mask_sources: list[str] = []
             try:
                 for index, path in enumerate(paths, start=1):
                     self.events.put(("progress", (index - 1, len(paths), path.name)))
-                    result = self.pipeline.analyze(path, settings)
+                    result = self.pipeline.prepare(path, settings)
                     outputs.append(self.pipeline.save(result, output_dir, filename_suffix))
+                    if save_mask_settings:
+                        try:
+                            save_sidecar(result, settings)
+                        except Exception as error:
+                            raise OSError(f"画像は保存済みです: {outputs[-1]}\n.fyの保存に失敗しました: {error}") from error
                     completed_paths.append(path)
-                self.events.put(("complete", (outputs, completed_paths, remove_after)))
+                    mask_sources.append("restored" if result.restored_from_sidecar else "reanalyzed")
+                self.events.put(("complete", (outputs, completed_paths, remove_after, mask_sources)))
             except Exception as error:
                 self.events.put(
                     ("batch_error", (error, completed_paths, remove_after))
@@ -1469,6 +1619,35 @@ class AutoMosaicWindow(QMainWindow):
                     self._set_busy(False, "領域選択エラー")
                     if draft is self.edited_mask:
                         self._notice("critical", "領域選択エラー", str(error))
+                elif kind == "restored":
+                    generation, result, settings = payload
+                    if generation != self.analysis_generation:
+                        continue
+                    if self._selected_path() == result.source_path:
+                        if self.mask_edit_active and not self._confirm_discard_mask_edit(
+                            "保存済みマスクを復元", refresh_after=False,
+                        ):
+                            self._set_busy(False, "マスクの復元をキャンセルしました")
+                            continue
+                        self._restore_settings(settings)
+                        self.current_result = result
+                        self.set_preview_mode("処理結果")
+                        self._refresh_preview()
+                    self._set_busy(False, ".fyからマスクと設定を復元しました")
+                elif kind == "restore_error":
+                    generation, error = payload
+                    if generation != self.analysis_generation:
+                        continue
+                    self._set_busy(False, "マスクの復元エラー")
+                    self._notice("critical", "マスクの復元", str(error))
+                elif kind == "sidecar_complete":
+                    result, output = payload
+                    result.restored_from_sidecar = True
+                    if self._selected_path() == result.source_path:
+                        self.current_result = result
+                        self.mask_edit_dirty = False
+                    self._set_busy(False, f"{output.name}にマスクと設定を保存しました")
+                    self._notice("information", "完了", f"マスクと設定を保存しました。\n{output}")
                 elif kind == "analysis":
                     generation, result = payload  # type: ignore[misc]
                     if generation != self.analysis_generation:
@@ -1493,7 +1672,7 @@ class AutoMosaicWindow(QMainWindow):
                     self.progress.setValue(int(index / total * 100))
                     self.status_label.setText(f"{index + 1}/{total}: {name}")
                 elif kind == "complete":
-                    outputs, completed_paths, remove_after = payload  # type: ignore[misc]
+                    outputs, completed_paths, remove_after, *_ = payload  # type: ignore[misc]
                     self.progress.setValue(100)
                     self._set_busy(False, f"{len(outputs)}件を書き出しました")
                     if remove_after:
@@ -1508,9 +1687,11 @@ class AutoMosaicWindow(QMainWindow):
                     self._set_busy(False, f"{output.name}をコピーしました")
                     self._notice("information", "完了", f"コピーしました。\n{output}")
                 elif kind == "single_complete":
-                    result, output, remove_after, used_edited_mask = payload  # type: ignore[misc]
+                    result, output, remove_after, used_edited_mask, saved_mask_settings = payload  # type: ignore[misc]
                     if used_edited_mask:
                         self._end_mask_edit(refresh_preview=False)
+                    if saved_mask_settings:
+                        result.restored_from_sidecar = True
                     if not remove_after and self._selected_path() == result.source_path:
                         self.current_result = result
                         self.set_preview_mode("処理結果")

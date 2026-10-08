@@ -41,6 +41,13 @@ class DeterministicPipeline:
     def save(self, *args, **kwargs):
         return self.original.save(*args, **kwargs)
 
+    def restore(self, *args, **kwargs):
+        return self.original.restore(*args, **kwargs)
+
+    def prepare(self, path, settings):
+        restored = self.restore(path, settings)
+        return restored[0] if restored else self.analyze(path, settings)
+
 
 class AgentApiTests(unittest.TestCase):
     @classmethod
@@ -94,6 +101,37 @@ class AgentApiTests(unittest.TestCase):
     def decoded(self, endpoint):
         content, headers = self.http(endpoint)
         return cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_UNCHANGED), headers
+
+    def test_sidecar_save_restore_settings_and_export_provenance(self):
+        from auto_mosaic.sidecar import sidecar_path
+
+        self.call("settings.update", values={"output_dir": str(self.root / "out")})
+        self.call("images.add", paths=[str(self.image)])
+        self.call("mask.edit", shape="rectangle", points=[[5, 5], [20, 20]], action="add")
+        expected, _ = self.decoded("/mask")
+        saved = self.call("image.save_mask_settings")
+        self.assertEqual(saved["result"]["outputs"], [str(sidecar_path(self.image))])
+        self.call("images.clear", discard=True)
+        with patch.object(self.window.pipeline, "analyze", side_effect=AssertionError("must not detect")):
+            restored = self.call("images.add", paths=[str(self.image)])
+            self.assertEqual(restored["result"]["mask_source"], "restored")
+            self.call("settings.update", values={"effect_size": 24, "save_mask_settings": True})
+            metadata, _ = self.http("/preview/metadata")
+            self.assertEqual(metadata["mask_source"], "restored")
+            mask, _ = self.decoded("/mask")
+            np.testing.assert_array_equal(mask, expected)
+            exported = self.call("image.save")
+            self.assertEqual(exported["result"]["mask_source"], "restored")
+            self.assertFalse(exported["result"]["detection_rerun"])
+            batch = self.call("images.save_all")
+            self.assertEqual(batch["result"]["saved_images"][0]["mask_source"], "restored")
+        self.call("settings.update", values={"effect_size": 32})
+        restored = self.call("image.restore_mask_settings")
+        self.assertEqual(restored["result"]["mask_source"], "restored")
+        self.assertEqual(self.window.effect_size_slider.value(), 24)
+        relocated = self.root / "elsewhere.fy"
+        sidecar_path(self.image).rename(relocated)
+        self.call("image.restore_mask_settings", path=str(relocated))
 
     def test_discovery_image_preview_edit_and_export(self):
         description, _ = self.http()

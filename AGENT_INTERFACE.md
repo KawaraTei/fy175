@@ -51,19 +51,26 @@ HTTPを扱えるツールなら使用できます。HTTP機能がないツール
 APIの設定をUIへ伝播し、設定の型・範囲もUIから取得します。APIで別の既定値を管理しません。
 検出設定を変えたら再解析してください。効果設定は既存マスクを保持してプレビューに反映します。
 編集中のマスクがある操作を破棄する場合は明示的に `discard:true` を指定します。
-画像の下書きは `image.save` で使われます。
-`images.save_all` はUIと同じく各画像を再解析します。
+画像の下書きは `image.save` で使われます。元画像の隣に `画像.png.fy` があれば、
+画像を選択した際にマスクと処理設定を自動復元します。復元後の `image.save` は再解析せずマスクを使います。
+`image.save_mask_settings` は現在のマスクと設定だけを `.fy` に保存します。画像は書き出しません。
+`image.restore_mask_settings` は元画像の隣の `.fy` を復元します。別の場所なら `path` で `.fy` を指定します。
+APIではファイル選択画面を開かず、対応するファイルがなければパス指定を求めるエラーを返します。
+`settings.update` の `save_mask_settings:true` は、個別・一括の画像保存に合わせて `.fy` を更新する設定です。
+`images.save_all` は保存済み `.fy` のマスクがあれば現在の設定で処理し、なければ再解析します。
 下書きは表示中の1枚だけで、切替・再解析・終了をまたいでは保持しません。
 複数の画像を編集して保存する場合は `select → edit → image.save` を画像ごとに繰り返してください。
-`images.save_all` に編集は反映されません。切替や終了時の下書き破棄には `discard:true` が必要です。
+未保存の下書きは `images.save_all` に反映されません。`.fy` に保存したマスクは一括処理でも使えます。
+切替や終了時の下書き破棄には `discard:true` が必要です。
 
 JSONレスポンスは `application/json; charset=utf-8` です。PowerShell 5.1でも日本語を取得できます。
 APIバージョン2では `image.status` と `preview_view` は機械向けコードを返し、
 表示文は `status_text` と `preview_view_text` に分けています。コード一覧は `GET /` に含めます。
 解析・個別保存ジョブは `detection_count` に加え、検出のindex・種類・確信度・矩形・マスク画素数も返します。
-保存ジョブの `result.mask_source` は `edited`（編集中マスクを使用）または `reanalyzed`（検出を再実行）です。
+保存ジョブの `result.mask_source` は `edited`（編集中）、`restored`（`.fy` から復元）、
+`reanalyzed`（検出を再実行）、`mixed`（一括処理に複数経路が混在）です。
 `used_edited_mask` と `detection_rerun` も真偽値で返します。
-一括保存は常に `reanalyzed` で、`saved_images[]` に元画像の `path`、保存先の `output` と同じ処理経路情報を返します。
+一括保存の `saved_images[]` に元画像の `path`、保存先の `output` と画像ごとの処理経路情報を返します。
 
 ### 検出単位の編集とundo
 
@@ -78,7 +85,8 @@ indexは現在の解析内だけで有効で、再解析後は取得し直して
 検出時の矩形・確信度は編集では変わらず、現在のマスク画素数を別に返します。
 
 `mask.undo` はマスク操作を1手戻します。最大20操作、圧縮したマスクの合計128MiBまで保持します。
-下書き破棄、再解析、画像切替、保存成功で履歴をリセットします。設定変更はundo対象に含めません。
+下書き破棄、再解析、画像切替、画像保存成功で履歴をリセットします。
+`image.save_mask_settings` は編集中の履歴を保持します。設定変更はundo対象に含めません。
 `mask_expansion` は自動輪郭の設定で、手動編集には再適用しません。手動調整には `mask.dilate/erode` を使用します。
 
 ## 座標とプレビュー
@@ -89,12 +97,12 @@ indexは現在の解析内だけで有効で、再解析後は取得し直して
 元サイズ、切出し位置、出力サイズ、元画像の単位／プレビューピクセルが含まれます。
 プレビュー上の座標は、切出し原点に「座標 × source_units_per_pixel」を加えて元画像へ変換します。
 `GET /preview/metadata` に同じクエリを指定すると、同じ座標変換情報をJSON本文で取得できます。
-`image_index` と `view`、プレビューの `mask_source`（`edited` / `automatic` / `none`）も含めます。
+`image_index` と `view`、プレビューの `mask_source`（`edited` / `restored` / `automatic` / `none`）も含めます。
 
 `GET /preview?image_index=1&view=mask_overlay` のように画像番号を指定すると、未選択画像も取得できます。
 現在の選択・編集中マスク・undo履歴・UI表示は切り替えません。選択中の画像番号なら現在の下書きを使用します。
-未選択画像の処理済みビューは現在の設定で解析し、直近1枚の結果をキャッシュします。
-設定または元ファイルが変わると解析をやり直します。初回はHTTP 202のJSONで `job` と `retry_url` を返すので、
+未選択画像の処理済みビューは保存済みマスクまたは現在の設定での解析を使い、直近1枚の結果をキャッシュします。
+設定、元ファイル、`.fy` が変わると処理をやり直します。初回はHTTP 202のJSONで `job` と `retry_url` を返すので、
 ジョブ完了を確認して同じURLを再取得してください。失敗時はジョブの `error` を確認します。
 `/preview/metadata` も同じ動作です。`view=original` は解析せず取得でき、未選択画像の
 `mask_source` は `none`、未取得の `mask_pixels` は `null` になります。

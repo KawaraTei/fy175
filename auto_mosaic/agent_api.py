@@ -85,8 +85,10 @@ OPERATIONS = {
     "mask.remove_detection": operation("Remove only pixels owned by this accepted detection; preserve pixels owned by overlapping detections. Creates an undoable draft.", index="required detection index from /state; stable until next analysis"),
     "mask.dilate": operation("Expand current mask, or one detection's owned mask; expansion is in original pixels and preserves other detections.", px="required integer 1..100", index="optional detection index; omitted means combined mask"),
     "mask.erode": operation("Shrink current mask, or one detection's owned mask; preserve overlapping other detections.", px="required integer 1..100", index="optional detection index; omitted means combined mask"),
-    "image.save": operation("Save selected image using current draft if present; otherwise rerun analysis, exactly as UI. Set output_dir/suffix through settings.update, or pass an exact path.", path="optional absolute PNG/JPEG output filename; existing file rejected"),
-    "images.save_all": operation("Analyze and save all images; requires no active draft."),
+    "image.save": operation("Save selected image using current draft or restored .fy mask if present; otherwise rerun analysis. Set save_mask_settings=true to update the original image's .fy. Set output_dir/suffix through settings.update, or pass an exact path.", path="optional absolute PNG/JPEG output filename; existing file rejected"),
+    "image.save_mask_settings": operation("Save current mask and processing settings beside the original as image.ext.fy without exporting an image. Existing .fy is updated."),
+    "image.restore_mask_settings": operation("Restore mask and settings from the selected image's .fy, or an explicit .fy path. Files must match the original image. No file dialog is opened by the API.", path="optional absolute .fy filename; required if adjacent .fy is absent", discard="optional boolean: replace existing draft"),
+    "images.save_all": operation("Save all images using existing .fy masks or fresh analysis with current settings; requires no active draft."),
     "app.shutdown": operation("Close app after HTTP response is sent. Busy jobs must finish first. Unsaved mask requires discard=true.", discard="optional boolean"),
 }
 
@@ -122,24 +124,30 @@ class AgentController:
             job["progress"] = list(payload)
             return
         if workspace == "image":
-            if event in {"analysis", "analysis_error"} and payload[0] != self.window.analysis_generation:
+            if event in {"analysis", "restored", "analysis_error", "restore_error"} and payload[0] != self.window.analysis_generation:
                 return
-            if event == "analysis":
+            if event in {"analysis", "restored"}:
                 self._reset_history()
                 result = self._result_details(payload[1])
+                result["mask_source"] = "restored" if event == "restored" else "automatic"
+            elif event == "sidecar_complete":
+                result = {"outputs": [str(payload[1])], **self._result_details(payload[0])}
             elif event == "single_complete":
+                restored = payload[0].restored_from_sidecar
                 result = {"outputs": [str(payload[1])], **self._result_details(payload[0]),
-                          "mask_source": "edited" if payload[3] else "reanalyzed",
-                          "used_edited_mask": bool(payload[3]), "detection_rerun": not payload[3]}
+                          "mask_source": "edited" if payload[3] else "restored" if restored else "reanalyzed",
+                          "used_edited_mask": bool(payload[3]), "detection_rerun": not payload[3] and not restored}
                 self._reset_history()
             elif event == "complete":
-                result = {"outputs": [str(path) for path in payload[0]], "mask_source": "reanalyzed",
-                          "used_edited_mask": False, "detection_rerun": True,
-                          "saved_images": [{"path": str(source), "output": str(output), "mask_source": "reanalyzed",
-                                            "used_edited_mask": False, "detection_rerun": True}
-                                           for source, output in zip(payload[1], payload[0])]}
-            elif event in {"analysis_error", "error", "batch_error"}:
-                error = payload[1] if event == "analysis_error" else payload[0] if event == "batch_error" else payload
+                sources = payload[3]
+                result = {"outputs": [str(path) for path in payload[0]],
+                          "mask_source": sources[0] if len(set(sources)) == 1 else "mixed",
+                          "used_edited_mask": False, "detection_rerun": "reanalyzed" in sources,
+                          "saved_images": [{"path": str(source), "output": str(output), "mask_source": mask_source,
+                                            "used_edited_mask": False, "detection_rerun": mask_source == "reanalyzed"}
+                                           for source, output, mask_source in zip(payload[1], payload[0], sources)]}
+            elif event in {"analysis_error", "restore_error", "error", "batch_error"}:
+                error = payload[1] if event in {"analysis_error", "restore_error"} else payload[0] if event == "batch_error" else payload
                 job.update(status="failed", error=str(error))
                 self.last_error = str(error)
                 if event == "batch_error":
@@ -304,7 +312,8 @@ class AgentController:
             fields.update(mask_threshold=(w.mask_threshold_spin, "number", None),
                           mask_expansion=(w.mask_expansion_spin, "integer", None),
                           output_dir=(w.output_edit, "string", None), suffix=(w.suffix_edit, "string", None),
-                          remove_after_process=(w.remove_after_process_check, "boolean", None))
+                          remove_after_process=(w.remove_after_process_check, "boolean", None),
+                          save_mask_settings=(w.save_sidecar_check, "boolean", None))
         return fields
 
     def _settings(self, workspace):
@@ -351,7 +360,7 @@ class AgentController:
                     require(Path(value).is_absolute(), "output_dir must be absolute")
                 if name == "suffix":
                     require(not any(c in value for c in '<>:"/\\|?*') and not value.endswith((" ", ".")), "Invalid filename suffix")
-        detection_keys = set(fields) - {"effect", "effect_size", "output_dir", "suffix", "remove_after_process"}
+        detection_keys = set(fields) - {"effect", "effect_size", "output_dir", "suffix", "remove_after_process", "save_mask_settings"}
         changing_detection = any(name in detection_keys and value != self._settings(workspace)[name] for name, value in values.items())
         if changing_detection:
             self._draft(workspace, discard)
@@ -374,6 +383,7 @@ class AgentController:
             reference = w.current_result
             w.current_result = w.pipeline.process_with_mask(reference.source_path, reference.mask, w._settings(), reference.detections,
                                                           reference.used_box_fallbacks, reference.below_threshold_detections, reference.detection_masks)
+            w.current_result.restored_from_sidecar = reference.restored_from_sidecar
             w._refresh_preview()
 
     def state(self):
@@ -512,6 +522,21 @@ class AgentController:
                     w._remove_rows(indices, manual)
                     if w._selected_path() is not None:
                         job = self._track("image", name)
+        elif name == "image.restore_mask_settings":
+            from auto_mosaic.sidecar import sidecar_path
+
+            require(w._selected_path() is not None, "Select an image first", 409)
+            target = self._path(args["path"]) if "path" in args else sidecar_path(w._selected_path())
+            require(target.exists(), "Adjacent .fy is absent; specify path", 409)
+            self._draft("image", discard)
+            job = self._track("image", name)
+            w._restore_mask_settings(sidecar_file=target)
+        elif name == "image.save_mask_settings":
+            require(w.current_result is not None and w.current_result.source_path == w._selected_path(),
+                    "Analyze or restore an image first", 409)
+            w._settings()
+            job = self._track("image", name)
+            w._save_mask_settings()
         elif name == "image.analyze":
             require(w._selected_path() is not None, "Select an image first", 409)
             w._settings()
@@ -564,12 +589,13 @@ class AgentController:
                                                    "source_crop": "[x,y,width,height] in original pixels; actual bounds after rounding",
                                                    "source_units_per_pixel": "[sx,sy]; original point = [crop.x + preview.x*sx, crop.y + preview.y*sy]",
                                                    "image_index": "Zero-based image index", "view": "Requested view code",
-                                                   "mask_source": "edited, automatic, or none (unanalysed unselected original view)",
+                                                   "mask_source": "edited, restored, automatic, or none (unanalysed unselected original view)",
                                                    "mask_pixels": "Full-size combined mask pixel count; null for an unanalysed, unselected original view"},
                               "detection_view": f"Colored masks/boxes are accepted detections. Gray boxes are preview-only candidates with confidence >= {BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE} and below the chosen detection threshold; at most five, no masks. A lower user detection threshold still admits accepted detections below this preview floor. mask_overlay shows original pixels with colored coverage/contours and no boxes or labels. Manual editing hides box annotations. GET /state distinguishes accepted from below-threshold candidates.",
                               "files": "Absolute local paths. Images avoid overwrites by adding a sequence suffix.",
                               "jobs": "Terminal errors and partial batch completion are returned as data; no modal completion dialogs.",
-                              "save_provenance": "Save job result.mask_source is edited or reanalyzed; used_edited_mask and detection_rerun are booleans. Batch results also include saved_images with per-image provenance.",
+                              "save_provenance": "Save job result.mask_source is edited, restored, reanalyzed, or mixed (batch); used_edited_mask and detection_rerun are booleans. Batch results also include saved_images with per-image provenance.",
+                              "mask_settings_files": "Original image selection auto-restores image.ext.fy masks and settings. image.analyze explicitly replaces the restored mask. save_mask_settings enables sidecar updates during processed exports; image.save_mask_settings saves only the sidecar. Copy-original never writes a sidecar. Restored masks are reused for batch exports with current settings.",
                               "indexed_previews": "image_index selects a zero-based image without changing selection, draft or undo. Selected image uses current draft. Other images use current settings and a one-image analysis cache invalidated by file/settings changes. First processed preview returns HTTP 202 with job and retry_url; poll job then retry URL. Original view needs no analysis. Unselected previews do not change the UI display.",
                               "shutdown": "POST /commands app.shutdown closes the listening process after its response. pid is the actual listening app PID; parent_pid may be a Windows launcher. Stop the app through the API rather than relying on the launcher PID.",
                               "security": "Loopback only; browser Origin requests rejected; no CORS. Local agents have same file access as app."},
@@ -587,8 +613,13 @@ class AgentController:
                 "example": {"operation": "mask.edit", "arguments": {"workspace": "image", "shape": "stroke", "action": "add", "points": [[20, 20], [40, 30]], "diameter": 16}}}
 
     def _indexed_result(self, source, settings):
+        from auto_mosaic.sidecar import sidecar_path
+
         stat = source.stat()
-        key = (source, stat.st_mtime_ns, stat.st_size, settings)
+        sidecar = sidecar_path(source)
+        saved_stat = sidecar.stat() if sidecar.exists() else None
+        key = (source, stat.st_mtime_ns, stat.st_size, settings,
+               (saved_stat.st_mtime_ns, saved_stat.st_size) if saved_stat else None)
         if self.preview_cache is not None and self.preview_cache[0] == key:
             return self.preview_cache[1], None
         job = self.active.get("preview")
@@ -600,7 +631,7 @@ class AgentController:
         self.preview_key = key
         def work():
             try:
-                result = self.window.pipeline.analyze(source, settings)
+                result = self.window.pipeline.prepare(source, settings)
                 self.preview_events.put((key, result, None))
             except Exception as error:
                 self.preview_events.put((key, None, error))
@@ -689,11 +720,15 @@ class AgentController:
             if scale < 1:
                 image = cv2.resize(image, (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))),
                                    interpolation=cv2.INTER_NEAREST if path == "/mask" else cv2.INTER_AREA)
+        reference = w.current_result if source == w._selected_path() else result if view != "original" else None
+        mask_source = ("edited" if source == w._selected_path() and w.mask_edit_active else
+                       "restored" if reference is not None and reference.restored_from_sidecar else
+                       "automatic" if source == w._selected_path() or view != "original" else "none")
         metadata = {"source_width": width, "source_height": height, "width": image.shape[1], "height": image.shape[0],
                     "source_crop": [x, y, cw, ch], "source_units_per_pixel": [cw / image.shape[1], ch / image.shape[0]],
                     "mask_pixels": None if source != w._selected_path() and view == "original" else int(mask.sum()),
                     "image_index": image_index, "view": view,
-                    "mask_source": "edited" if source == w._selected_path() and w.mask_edit_active else "automatic" if source == w._selected_path() or view != "original" else "none"}
+                    "mask_source": mask_source}
         if path == "/preview/metadata":
             return 200, "application/json", metadata, {}
         ok, encoded = cv2.imencode(".png", image)

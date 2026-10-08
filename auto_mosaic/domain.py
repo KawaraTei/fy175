@@ -19,6 +19,14 @@ class EffectType(str, Enum):
 
 PREVIEW_VIEWS = {"original": "元画像", "detection": "検出範囲", "mask_overlay": "マスク範囲", "result": "処理結果"}
 
+# Shared limits for UI controls, API discovery, and saved processing settings.
+PROCESSING_RANGES = {
+    "confidence_threshold": (0.05, 0.95, 0.01),
+    "effect_size": (4, 64, 1),
+    "mask_expansion": (0, 20, 1),
+    "mask_threshold": (-10.0, 10.0, 0.1),
+}
+
 
 @dataclass(frozen=True)
 class Detection:
@@ -49,3 +57,4 @@ class ProcessingResult:
     used_box_fallbacks: int = 0
     # Index matches detections; each mask retains overlap with other detections.
     detection_masks: list[np.ndarray] = field(default_factory=list)
+    restored_from_sidecar: bool = False

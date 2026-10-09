@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import struct
+import zlib
 
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
+from PIL.PngImagePlugin import PngInfo
 
 from auto_mosaic.domain import Detection, EffectType
 
@@ -21,14 +24,41 @@ def load_image_bgr(path: Path) -> np.ndarray:
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
-def save_image_bgr(path: Path, image_bgr: np.ndarray) -> None:
+def _png_text_metadata(source_path: Path) -> PngInfo | None:
+    """Copy generation metadata as raw chunks, including text after IDAT."""
+    with source_path.open("rb") as source:
+        if source.read(8) != b"\x89PNG\r\n\x1a\n":
+            return None
+        metadata = PngInfo()
+        while True:
+            header = source.read(8)
+            if len(header) != 8:
+                raise ValueError(f"PNGメタデータを読み取れません: {source_path}")
+            length, chunk_type = struct.unpack(">I4s", header)
+            if chunk_type in {b"tEXt", b"iTXt", b"zTXt"}:
+                data = source.read(length)
+                crc = source.read(4)
+                if (len(data) != length or len(crc) != 4
+                        or struct.unpack(">I", crc)[0] != zlib.crc32(chunk_type + data)):
+                    raise ValueError(f"PNGメタデータが破損しています: {source_path}")
+                metadata.add(chunk_type, data)
+            else:
+                source.seek(length + 4, 1)
+            if chunk_type == b"IEND":
+                return metadata
+
+
+def save_image_bgr(
+    path: Path, image_bgr: np.ndarray, *, source_path: Path | None = None
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(rgb)
     if path.suffix.lower() in {".jpg", ".jpeg"}:
         image.save(path, quality=95, subsampling=0)
     else:
-        image.save(path, compress_level=4)
+        metadata = _png_text_metadata(source_path) if source_path is not None else None
+        image.save(path, compress_level=4, pnginfo=metadata)
 
 
 def apply_effect(

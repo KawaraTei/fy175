@@ -620,4 +620,17 @@ def test_drop_multiple_images_and_analyze_selected_automatically() -> None:
         assert window.image_paths == [second.resolve()]
         assert window.manual_review_paths == []
 
+        # Selection queues analysis. Keep the fixture alive until its worker and
+        # Qt events finish so a later test cannot receive a missing-file dialog.
+        deadline = monotonic() + 2.0
+        while monotonic() < deadline:
+            app.processEvents()
+            window._poll_events()
+            if not window.busy and window.current_result is not None:
+                break
+            sleep(0.01)
+        assert not window.busy
+        assert window.current_result is not None
+        assert window.current_result.source_path == second.resolve()
+
     window.close()

@@ -52,7 +52,9 @@ def test_save_uses_custom_suffix() -> None:
     with TemporaryDirectory() as temporary:
         output_dir = Path(temporary)
         pipeline = MosaicPipeline(Path("models"))
-        saved = pipeline.save(_result(Path("sample.png")), output_dir, "_hidden")
+        source = output_dir / "sample.png"
+        Image.new("RGB", (4, 4)).save(source)
+        saved = pipeline.save(_result(source), output_dir, "_hidden")
         assert saved.name == "sample_hidden.png"
         assert saved.exists()
 
@@ -60,11 +62,13 @@ def test_save_uses_custom_suffix() -> None:
 def test_save_allows_empty_suffix_without_overwrite() -> None:
     with TemporaryDirectory() as temporary:
         output_dir = Path(temporary)
-        (output_dir / "sample.png").write_bytes(b"existing")
+        source = output_dir / "sample.png"
+        Image.new("RGB", (4, 4)).save(source)
+        original = source.read_bytes()
         pipeline = MosaicPipeline(Path("models"))
-        saved = pipeline.save(_result(Path("sample.png")), output_dir, "")
+        saved = pipeline.save(_result(source), output_dir, "")
         assert saved.name == "sample_2.png"
-        assert (output_dir / "sample.png").read_bytes() == b"existing"
+        assert source.read_bytes() == original
 
 
 def test_process_with_mask_uses_edited_mask_without_detection() -> None:

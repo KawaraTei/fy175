@@ -159,7 +159,7 @@ class MosaicPipeline:
         if output_path is not None:
             if output_path.exists():
                 raise FileExistsError(f"保存先が既に存在します: {output_path}")
-            save_image_bgr(output_path, result.image_bgr)
+            save_image_bgr(output_path, result.image_bgr, source_path=result.source_path)
             return output_path
         extension = result.source_path.suffix.lower()
         if extension not in {".png", ".jpg", ".jpeg"}:
@@ -170,7 +170,7 @@ class MosaicPipeline:
         while output_path.exists():
             output_path = output_dir / f"{output_stem}_{sequence}{extension}"
             sequence += 1
-        save_image_bgr(output_path, result.image_bgr)
+        save_image_bgr(output_path, result.image_bgr, source_path=result.source_path)
         return output_path
 
     @staticmethod

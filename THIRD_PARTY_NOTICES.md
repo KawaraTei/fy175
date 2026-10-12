@@ -19,6 +19,7 @@ their own licenses; the application license does not replace them.
 | PySide6 Essentials | 6.11.1 | LGPL-3.0-only (the open-source option selected here) | `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` |
 | shiboken6 | 6.11.1 | LGPL-3.0-only (the open-source option selected here) | `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` |
 | PyInstaller | 6.15.0 | GPL-2.0-or-later with the PyInstaller bootloader exception | `LICENSES/PyInstaller-6.15.0.txt` |
+| FFmpeg / ffprobe (BtbN Windows static build) | Exact version and hashes in generated `FFMPEG_BUILD.txt` | GPL-3.0-or-later for the current `--enable-gpl --enable-version3` build, as reported by `ffmpeg -L` | `LICENSES/GPL-3.0.txt`; upstream components retain their notices |
 
 The Windows folder build keeps the Qt libraries as separate DLL files. Do not
 merge or statically link them without reviewing the resulting LGPL obligations.
@@ -49,6 +50,16 @@ See [`MODEL_LICENSES.md`](MODEL_LICENSES.md) for model checksums, the upstream
 metadata conflict, and rules for replacing or redistributing model files.
 
 ## Source availability
+
+Video processing invokes FFmpeg and ffprobe as separate executables. The build
+copies the existing shared tools; it does not download another installation.
+Upstream references: [FFmpeg](https://ffmpeg.org/),
+[license information](https://ffmpeg.org/legal.html), and
+[BtbN build recipes](https://github.com/BtbN/FFmpeg-Builds).
+Before distributing those binaries, provide the exact corresponding FFmpeg and
+linked-dependency sources, patches, build scripts, and applicable notices. An
+upstream homepage alone is not a corresponding-source distribution. Record the
+matching build provenance and source download with the release; see `DISTRIBUTION.md`.
 
 FY175AutoMosaic is intended to be published with its complete corresponding source
 code. If you redistribute a binary, provide recipients with the exact source

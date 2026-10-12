@@ -32,3 +32,5 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & '.venv\Scripts\python.exe' -c "from tests.test_detector import test_preview_candidates_have_confidence_floor_without_overriding_user_threshold; test_preview_candidates_have_confidence_floor_without_overriding_user_threshold(); print('preview confidence floor check passed')"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& '.venv\Scripts\python.exe' -m unittest tests.test_video tests.test_video_ui tests.test_video_mask_edit -v
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

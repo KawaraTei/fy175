@@ -59,6 +59,7 @@ from auto_mosaic.image_ops import (
 from auto_mosaic.model_catalog import required_model_paths
 from auto_mosaic.pipeline import MosaicPipeline
 from auto_mosaic.sidecar import save_sidecar, sidecar_path
+from auto_mosaic.ui_style import APP_STYLE, section_label
 
 
 APP_NAME = "FY175AutoMosaic"
@@ -274,6 +275,16 @@ class AutoMosaicWindow(QMainWindow):
         self.poll_timer.timeout.connect(self._poll_events)
         self.poll_timer.start(100)
         self._update_model_status()
+        self.video_window = None
+
+    def _open_video_mode(self) -> None:
+        from auto_mosaic.video_ui import VideoMosaicWindow
+
+        if self.video_window is None:
+            self.video_window = VideoMosaicWindow()
+        self.video_window.show()
+        self.video_window.raise_()
+        self.video_window.activateWindow()
 
     def _build_layout(self) -> None:
         central = QWidget()
@@ -306,6 +317,8 @@ class AutoMosaicWindow(QMainWindow):
         self.restore_sidecar_button.setEnabled(False)
         toolbar_layout.addWidget(self.restore_sidecar_button)
         toolbar_layout.addStretch(1)
+        self.video_mode_button = self._button("動画モード(β)", self._open_video_mode)
+        toolbar_layout.addWidget(self.video_mode_button)
         self.status_label = QLabel("画像を追加してください")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         toolbar_layout.addWidget(self.status_label, 1)
@@ -603,43 +616,7 @@ class AutoMosaicWindow(QMainWindow):
         body_layout.addWidget(settings_panel, 0, 2)
 
     def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow, QWidget { background: #17191f; color: #d9dde5; font-family: "Segoe UI"; font-size: 10pt; }
-            QFrame#toolbar, QFrame#panel, QFrame#previewBar { background: #20232b; }
-            QFrame#previewPanel { background: #0e1015; border: 1px solid #303540; }
-            QLabel#preview { color: #6f7787; background: #0e1015; }
-            QLabel#section { color: #f0f2f6; font-weight: 600; }
-            QLabel#muted { color: #8991a1; }
-            QLabel#value { color: #53b8ff; }
-            QPushButton { background: #356b92; color: white; border: none; border-radius: 3px; padding: 7px 12px; }
-            QPushButton:hover { background: #4f89b2; }
-            QPushButton:disabled { background: #3a3d45; color: #858993; }
-            QPushButton#previewMode { background: #292e38; border: 1px solid #49515f; padding: 6px; }
-            QPushButton#previewMode:hover { background: #3b4655; }
-            QPushButton#previewMode:checked { background: #356b92; border: 1px solid #75c5ff; font-weight: 600; }
-            QPushButton#previewMode:disabled { background: #3a3d45; color: #858993; }
-            QPushButton#copyCurrent:enabled { background: #9bafbd; color: #17232d; }
-            QPushButton#copyCurrent:enabled:hover { background: #b3c4cf; }
-            QPushButton#restoreMask { padding: 3px 8px; }
-            QPushButton#restoreMask:enabled { background: #292e38; color: #bbc2cd; }
-            QPushButton#restoreMask:enabled:hover { background: #3b4655; }
-            QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
-            QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
-            QListWidget::item { padding: 5px; }
-            QListWidget::item:selected { background: #356b92; color: white; }
-            QComboBox QAbstractItemView { background: #111319; color: #e5e8ef; selection-background-color: #356b92; }
-            QCheckBox { spacing: 8px; }
-            QCheckBox::indicator { width: 16px; height: 16px; }
-            QSlider::groove:horizontal { height: 5px; background: #3a404d; border-radius: 2px; }
-            QSlider::sub-page:horizontal { background: #53b8ff; border-radius: 2px; }
-            QSlider::handle:horizontal { width: 15px; margin: -5px 0; background: #e9edf4; border-radius: 7px; }
-            QProgressBar { background: #2a2e38; border: none; height: 7px; border-radius: 3px; }
-            QProgressBar::chunk { background: #53b8ff; border-radius: 3px; }
-            QSplitter::handle:vertical { background: #303540; height: 6px; margin: 2px 0; }
-            QSplitter::handle:vertical:hover { background: #53b8ff; }
-            """
-        )
+        self.setStyleSheet(APP_STYLE)
 
     @staticmethod
     def _panel() -> QFrame:
@@ -649,9 +626,7 @@ class AutoMosaicWindow(QMainWindow):
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("section")
-        return label
+        return section_label(text)
 
     @staticmethod
     def _button(text: str, callback) -> QPushButton:
@@ -1735,11 +1710,18 @@ def run() -> None:
 
     parser = argparse.ArgumentParser(description="FY175AutoMosaic: local image processing")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--video", action="store_true", help="Open video mode.")
     parser.add_argument("--agent-api", type=int, nargs="?", const=8765, metavar="PORT",
                         help="Start built-in local HTTP agent API (default 8765). GET / for all operations.")
     options = parser.parse_args()
+    if options.video and options.agent_api is not None:
+        parser.error("--agent-api supports image mode only; omit --video.")
     app = QApplication(sys.argv)
-    window = AutoMosaicWindow()
+    if options.video and not options.smoke_test:
+        from auto_mosaic.video_ui import VideoMosaicWindow
+        window = VideoMosaicWindow()
+    else:
+        window = AutoMosaicWindow()
     smoke_test = options.smoke_test
     if options.agent_api is not None:
         from auto_mosaic.agent_api import AgentServer

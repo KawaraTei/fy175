@@ -36,6 +36,11 @@ releases. It is operational guidance, not legal advice.
   third-party notices applicable to Core, GUI, Network, SVG, and Widgets.
 - [ ] Re-run dependency and model license review after every version or checksum
   change.
+- [ ] For video builds, retain `FFMPEG_BUILD.txt`, `LICENSES/GPL-3.0.txt`, and all
+  notices for the exact BtbN FFmpeg/ffprobe build and its linked libraries. Supply
+  their corresponding source and build recipes alongside the binary release.
+  Verify `ffmpeg -L` for the binaries being shipped; the current shared build is
+  GPL-3.0-or-later. Do not treat a link to upstream HEAD as matching source.
 - [ ] Test the archive from a clean Windows account and confirm that all notices
   can be opened without installing development tools.
 

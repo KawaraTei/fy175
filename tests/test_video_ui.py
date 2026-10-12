@@ -14,7 +14,7 @@ import numpy as np
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from auto_mosaic.domain import EffectType, ImageMode
 from auto_mosaic.image_ops import apply_effect
@@ -81,7 +81,8 @@ class VideoUiTests(unittest.TestCase):
                 window.effect_size.setValue(28)
                 self.assertIs(window.analysis, old_result)
                 self.assertTrue(window.export_button.isEnabled())
-                window.threshold_slider.setValue(40)
+                with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Discard):
+                    window.threshold_slider.setValue(40)
                 self.assertIsNone(window.analysis)
                 self.assertFalse(window.export_button.isEnabled())
                 self.assertEqual(window.change_model.rowCount(), 0)
@@ -89,7 +90,8 @@ class VideoUiTests(unittest.TestCase):
                 self.assertEqual(window.progress.value(), 0)
                 self.assertTrue(window.time_label.text().startswith("00:01.500"))
             finally:
-                window.close()
+                with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Discard):
+                    window.close()
 
     def test_separate_window_preserves_still_image_state(self):
         still = AutoMosaicWindow()
@@ -168,7 +170,8 @@ class VideoUiTests(unittest.TestCase):
                         self.assertLess(error, wrong_error / 3, "encoded output must match the selected effect")
                         self.assertLess(np.abs(encoded[~mask] - source_frame[~mask]).mean(), 3)
             finally:
-                window.close()
+                with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Discard):
+                    window.close()
 
 
 if __name__ == "__main__":

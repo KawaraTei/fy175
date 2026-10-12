@@ -23,6 +23,9 @@ from auto_mosaic.video_analysis import VideoAnalysis, VideoAnalysisSettings, ana
 from auto_mosaic.video_io import VIDEO_EXTENSIONS, VideoCancelled, decode_frames, probe_video
 from auto_mosaic.video_mask_editor import VideoMaskEditor
 from auto_mosaic.video_preview import VideoPreview
+from auto_mosaic.video_project import (
+    EditorState, PROJECT_FILTER, PROJECT_SUFFIX, ProjectSourceUnavailable, load_project, save_project,
+)
 from auto_mosaic.video_timeline import ChangeTableModel, MaskCountTimeline, time_text
 
 
@@ -44,6 +47,8 @@ class VideoMosaicWindow(QMainWindow):
         self.closing = False
         self.change_frames = []
         self.last_output = None
+        self.project_path = None
+        self.project_dirty = False
         self.setWindowTitle("FY175AutoMosaic — 動画処理")
         self.resize(1340, 940)
         self.setMinimumSize(1060, 760)
@@ -68,6 +73,13 @@ class VideoMosaicWindow(QMainWindow):
         self.open_button = QPushButton("動画を開く")
         self.open_button.clicked.connect(self._choose_video)
         header.addWidget(self.open_button)
+        self.project_open_button = QPushButton("編集を開く…")
+        self.project_open_button.clicked.connect(self._choose_project)
+        header.addWidget(self.project_open_button)
+        self.project_save_button = QPushButton("編集を保存…")
+        self.project_save_button.setToolTip("解析結果・マスク・設定・現在位置を .fyvideo に保存")
+        self.project_save_button.clicked.connect(self._choose_project_save)
+        header.addWidget(self.project_save_button)
         self.filename = QLabel("動画未選択")
         self.filename.setWordWrap(True)
         header.addWidget(self.filename, 1)
@@ -187,6 +199,7 @@ class VideoMosaicWindow(QMainWindow):
         self.effect.addItem("モザイク", EffectType.MOSAIC.value)
         self.effect.addItem("ぼかし", EffectType.BLUR.value)
         self.effect.currentIndexChanged.connect(self._render_preview)
+        self.effect.currentIndexChanged.connect(self._mark_project_dirty)
         settings.addWidget(self.effect)
         size_row = QHBoxLayout()
         size_row.addWidget(QLabel("サイズ"))
@@ -200,6 +213,7 @@ class VideoMosaicWindow(QMainWindow):
         self.effect_size.setValue(16)
         self.effect_size.valueChanged.connect(lambda value: self.effect_size_value.setText(f"{value} px"))
         self.effect_size.valueChanged.connect(self._render_preview)
+        self.effect_size.valueChanged.connect(self._mark_project_dirty)
         settings.addWidget(self.effect_size)
         settings.addSpacing(8)
 
@@ -333,6 +347,9 @@ class VideoMosaicWindow(QMainWindow):
         self._update_controls()
 
     def _discard_analysis(self):
+        self.project_path = None
+        self.project_dirty = False
+        self._update_project_title()
         self.mask_editor.reset()
         if self.analysis is not None:
             self.analysis.close()
@@ -353,6 +370,84 @@ class VideoMosaicWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "処理する動画を選択", "", "動画 (*.mp4 *.mov *.mkv *.webm *.avi *.m4v)")
         if path:
             self.load_video(Path(path))
+
+    def _update_project_title(self):
+        name = f" — {self.project_path.name}" if self.project_path else ""
+        self.setWindowTitle(f"FY175AutoMosaic — 動画処理{name}{' *' if self.project_dirty else ''}")
+
+    def _mark_project_dirty(self, *_):
+        if self.analysis is not None and not self.busy:
+            self.project_dirty = True
+            self._update_project_title()
+
+    def _choose_project(self):
+        path, _ = QFileDialog.getOpenFileName(self, "動画の編集を開く", "", PROJECT_FILTER)
+        if path:
+            self.load_project_from(Path(path))
+
+    def load_project_from(self, path: Path, *, source_path=None, confirmed=False):
+        if self.busy or (not confirmed and not self.mask_editor.confirm_clear("保存した編集を開く")):
+            return
+        self.pending_project = path
+        self._start_job("project_load", lambda cancel, progress: load_project(path, cancel, progress, source_path=source_path))
+
+    def _choose_project_save(self):
+        if self.analysis is None or self.busy:
+            return
+        proposed = self.project_path or self.info.path.with_name(self.info.path.name + PROJECT_SUFFIX)
+        path, _ = QFileDialog.getSaveFileName(self, "動画の編集を保存", str(proposed), PROJECT_FILTER)
+        if path:
+            self.save_project_to(Path(path))
+
+    def save_project_to(self, path: Path):
+        if self.analysis is None or self.busy:
+            return
+        if not path.suffix:
+            path = path.with_suffix(PROJECT_SUFFIX)
+        editor = self.mask_editor
+        state = EditorState(self.current_frame, self.view_mode.currentText(), self.zoom.currentData(),
+                            self.settings_tabs.currentIndex(), editor.brush.value(), editor.start,
+                            editor.end.value() - 1, editor.dirty)
+        draft = None if editor.draft is None else editor.draft.copy()
+        analysis, effect, size = self.analysis, self._effect_type(), self.effect_size.value()
+        self._start_job("project_save", lambda cancel, progress: save_project(analysis, path, effect, size, state, draft, cancel, progress))
+
+    def _restore_project(self, project):
+        self._set_analysis(project.analysis)
+        processing = self.analysis.settings.processing
+        self.analysis_config_values = (self.mode.findData(processing.mode.value), "penis" in processing.targets,
+            "vagina" in processing.targets, round(processing.confidence_threshold * 100),
+            self.interval.findData(self.analysis.settings.contour_interval))
+        self._restore_config_values()
+        for control, value in ((self.effect, self.effect.findData(processing.effect.value)),
+                               (self.view_mode, self.view_mode.findText(project.state.view)),
+                               (self.zoom, self.zoom.findData(project.state.timeline_seconds))):
+            control.blockSignals(True)
+            control.setCurrentIndex(value)
+            control.blockSignals(False)
+        self.effect_size.blockSignals(True)
+        self.effect_size.setValue(processing.effect_size)
+        self.effect_size.blockSignals(False)
+        self.effect_size_value.setText(f"{processing.effect_size} px")
+        self.interval_note.setText("検出は全フレームで実行します。" if self.interval.currentData() == 1 else
+                                  "全フレームで検出。輪郭の移動・拡縮で補間（変形には遅れあり）。")
+        self.timeline.set_window_seconds(project.state.timeline_seconds)
+        self.preview.reset_zoom()
+        self.seek(project.state.frame)
+        editor = self.mask_editor
+        editor.start = project.state.start
+        if editor.start is not None:
+            editor.end.setRange(min(editor.start + 2, len(self.analysis.frames)), len(self.analysis.frames))
+        editor.end.setValue(project.state.end + 1)
+        editor.brush.setValue(project.state.brush)
+        editor.draft, editor.dirty = project.draft, project.state.draft_dirty
+        self.settings_tabs.setCurrentIndex(project.state.tab)
+        self.filename.setText(self.info.path.name)
+        self.filename.setToolTip(str(self.info.path))
+        self.info_label.setText(f"{self.info.width} × {self.info.height}　{float(self.info.fps):.3f} fps　{time_text(self.info.duration)}")
+        self.project_path, self.project_dirty = project.path, False
+        self._update_project_title()
+        self._render_preview()
 
     def load_video(self, path: Path):
         if self.busy:
@@ -407,6 +502,7 @@ class VideoMosaicWindow(QMainWindow):
         self.cancel = threading.Event()
         self.progress.setValue(0)
         self.status.setText({"load": "動画を読み込んでいます…", "analyze": "動画を解析しています…", "export": "動画を書き出しています…",
+                            "project_load": "保存した編集を読み込んでいます…", "project_save": "編集を保存しています…",
                             "mask_save": "マスクを適用しています…", "mask_undo": "マスク変更を戻しています…", "propagate": "マスクを自動補完しています…"}[kind])
         self._update_controls()
         def work():
@@ -422,6 +518,8 @@ class VideoMosaicWindow(QMainWindow):
                 self.events.put(("success", (kind, result)))
             except VideoCancelled:
                 self.events.put(("cancelled", None))
+            except ProjectSourceUnavailable as error:
+                self.events.put(("project_source", str(error)))
             except Exception as error:
                 self.events.put(("error", str(error)))
         self.worker = threading.Thread(target=work, daemon=False)
@@ -436,6 +534,10 @@ class VideoMosaicWindow(QMainWindow):
             if event == "progress":
                 done, total, elapsed = payload
                 self.progress.setValue(min(99, round(done / max(1, total) * 100)))
+                if self.job_kind in {"project_load", "project_save"}:
+                    verb = "読み込み" if self.job_kind == "project_load" else "保存"
+                    self.status.setText(f"編集を{verb}中: {self.progress.value()}%")
+                    continue
                 speed = done / max(0.01, elapsed)
                 remaining = max(0, total - done) / max(0.01, speed)
                 verb = {"analyze": "解析", "propagate": "自動補完", "mask_save": "マスク適用"}.get(self.job_kind, "書き出し")
@@ -460,13 +562,32 @@ class VideoMosaicWindow(QMainWindow):
                 elif kind == "analyze":
                     self._set_analysis(result)
                     self.status.setText("解析完了。タイムラインと検出範囲を確認してから書き出してください。")
+                elif kind == "project_save":
+                    self.project_path, self.project_dirty = result, False
+                    self._update_project_title()
+                    self.status.setText(f"編集を保存しました: {result.name}")
+                elif kind == "project_load":
+                    self._restore_project(result)
+                    self.status.setText(f"編集を復元しました: {result.path.name}")
                 elif kind in {"mask_save", "propagate", "mask_undo"}:
                     self.mask_editor.accept_result(kind, result)
+                    self._mark_project_dirty()
                 else:
                     self.last_output = result
                     self.output_dir = result.parent
                     self.status.setText(f"書き出しました: {result}")
                 self.progress.setValue(100)
+            elif event == "project_source":
+                self.status.setText(payload)
+                self.progress.setValue(0)
+                self._update_controls()
+                if not self.closing:
+                    path, _ = QFileDialog.getOpenFileName(self, payload, "", "動画 (*.mp4 *.mov *.mkv *.webm *.avi *.m4v)")
+                    if path:
+                        self.load_project_from(self.pending_project, source_path=Path(path), confirmed=True)
+                if self.closing:
+                    QTimer.singleShot(0, self.close)
+                continue
             elif event == "cancelled":
                 self.status.setText("処理を中止しました。")
                 self.progress.setValue(0)
@@ -481,6 +602,8 @@ class VideoMosaicWindow(QMainWindow):
         self._discard_analysis()
         self.analysis, self.info = analysis, analysis.info
         self.mask_editor.edits, self.mask_editor.can_undo = analysis.cache.edit_state()
+        self.project_dirty = bool(self.mask_editor.edits)
+        self._update_project_title()
         self.mask_editor.end.setRange(1, len(analysis.frames))
         self.timeline.set_frames(analysis.frames, float(analysis.info.fps))
         self.timeline.set_edits(self.mask_editor.edits)
@@ -587,6 +710,8 @@ class VideoMosaicWindow(QMainWindow):
         ready = self.analysis is not None and self.analysis.complete and not self.busy
         editing = self.mask_editor.active
         self.open_button.setEnabled(not self.busy and not editing)
+        self.project_open_button.setEnabled(not self.busy and not editing)
+        self.project_save_button.setEnabled(ready)
         for control in self.analysis_controls:
             control.setEnabled(not self.busy and not editing)
         self.analyze_button.setEnabled(self.info is not None and not self.busy and not editing)

@@ -146,6 +146,7 @@ class VideoMaskEditor(QWidget):
                     max(0, min(height - 1, int((point.y() - rect.top()) * height / rect.height()))))
         if not rect.isEmpty() and paint_mask_stroke(self.draft, pixel(start), pixel(end), self.brush.value(), erase):
             self.dirty = True
+            self.window._mark_project_dirty()
             self.window._render_preview()
 
     def apply(self):
@@ -159,6 +160,7 @@ class VideoMaskEditor(QWidget):
         if self.dirty and not self._ask_discard("編集中のマスクを破棄"):
             return
         self.draft, self.dirty = None, False
+        self.window._mark_project_dirty()
         self.window._render_preview()
         self.window._update_controls()
         self.window.status.setText("編集中のマスクを破棄しました。適用済みの変更は保持しています。")
@@ -171,7 +173,12 @@ class VideoMaskEditor(QWidget):
             QMessageBox.StandardButton.Cancel) == QMessageBox.StandardButton.Discard
 
     def confirm_clear(self, action):
-        return not (self.dirty or self.edits) or self._ask_discard(action, all_changes=True)
+        if not self.window.project_dirty:
+            return True
+        return QMessageBox.warning(self.window, "未保存の編集",
+            f"{action}しますか？\n未保存の編集・設定は失われます。残す場合はキャンセルして「編集を保存」を押してください。",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel) == QMessageBox.StandardButton.Discard
 
     def set_start(self):
         frame = self.window.current_frame

@@ -8,10 +8,10 @@ import time
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QProgressBar,
     QPushButton, QScrollArea, QSlider, QTableView, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -49,6 +49,7 @@ class VideoMosaicWindow(QMainWindow):
         self.last_output = None
         self.project_path = None
         self.project_dirty = False
+        self.pending_frame = None
         self.setWindowTitle("FY175AutoMosaic — 動画処理")
         self.resize(1340, 940)
         self.setMinimumSize(1060, 760)
@@ -61,6 +62,46 @@ class VideoMosaicWindow(QMainWindow):
         self.poll_timer.start(80)
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self._play_tick)
+        self._update_controls()
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        # Sliders and combo boxes consume arrow keys before window shortcuts.
+        # Reserve plain arrows within this window, excluding dialogs/popups.
+        if (event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress)
+                and isinstance(watched, QWidget) and QWidget.window(watched) is self
+                and QApplication.activeModalWidget() is None
+                and QApplication.activePopupWidget() is None
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier
+                and event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right)):
+            if event.type() == QEvent.Type.KeyPress:
+                self._step_frame(-1 if event.key() == Qt.Key.Key_Left else 1)
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _step_frame(self, direction):
+        if self.analysis is None or not self.analysis.complete:
+            return
+        if self.busy:
+            if self.pending_frame is not None:
+                self.pending_frame = max(0, min(len(self.analysis.frames) - 1, self.pending_frame + direction))
+            return
+        self._stop_play()
+        target = max(0, min(len(self.analysis.frames) - 1, self.current_frame + direction))
+        if target == self.current_frame:
+            return
+        editor = self.mask_editor
+        editing = editor.active
+        if editing and editor.dirty:
+            self.pending_frame = target
+            editor.apply()
+            return
+        if editing:
+            editor.draft = None
+        self.seek(target)
+        if editing:
+            editor.begin_edit()
         self._update_controls()
 
     def _build_layout(self):
@@ -77,8 +118,11 @@ class VideoMosaicWindow(QMainWindow):
         self.project_open_button.clicked.connect(self._choose_project)
         header.addWidget(self.project_open_button)
         self.project_save_button = QPushButton("編集を保存…")
-        self.project_save_button.setToolTip("解析結果・マスク・設定・現在位置を .fyvideo に保存")
+        self.project_save_button.setToolTip("解析結果・マスク・設定・現在位置を .fyvideo に保存（Ctrl+S）")
         self.project_save_button.clicked.connect(self._choose_project_save)
+        self.project_save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.project_save_shortcut.setAutoRepeat(False)
+        self.project_save_shortcut.activated.connect(self.project_save_button.click)
         header.addWidget(self.project_save_button)
         self.filename = QLabel("動画未選択")
         self.filename.setWordWrap(True)
@@ -407,7 +451,7 @@ class VideoMosaicWindow(QMainWindow):
         editor = self.mask_editor
         state = EditorState(self.current_frame, self.view_mode.currentText(), self.zoom.currentData(),
                             self.settings_tabs.currentIndex(), editor.brush.value(), editor.start,
-                            editor.end.value() - 1, editor.dirty)
+                            editor.dirty)
         draft = None if editor.draft is None else editor.draft.copy()
         analysis, effect, size = self.analysis, self._effect_type(), self.effect_size.value()
         self._start_job("project_save", lambda cancel, progress: save_project(analysis, path, effect, size, state, draft, cancel, progress))
@@ -436,9 +480,6 @@ class VideoMosaicWindow(QMainWindow):
         self.seek(project.state.frame)
         editor = self.mask_editor
         editor.start = project.state.start
-        if editor.start is not None:
-            editor.end.setRange(min(editor.start + 2, len(self.analysis.frames)), len(self.analysis.frames))
-        editor.end.setValue(project.state.end + 1)
         editor.brush.setValue(project.state.brush)
         editor.draft, editor.dirty = project.draft, project.state.draft_dirty
         self.settings_tabs.setCurrentIndex(project.state.tab)
@@ -503,7 +544,8 @@ class VideoMosaicWindow(QMainWindow):
         self.progress.setValue(0)
         self.status.setText({"load": "動画を読み込んでいます…", "analyze": "動画を解析しています…", "export": "動画を書き出しています…",
                             "project_load": "保存した編集を読み込んでいます…", "project_save": "編集を保存しています…",
-                            "mask_save": "マスクを適用しています…", "mask_undo": "マスク変更を戻しています…", "propagate": "マスクを自動補完しています…"}[kind])
+                            "mask_save": "マスクを適用しています…", "mask_clear": "修正を解除しています…",
+                            "mask_undo": "マスク変更を戻しています…", "propagate": "マスクを自動補完しています…"}[kind])
         self._update_controls()
         def work():
             last_update = 0.0
@@ -540,7 +582,7 @@ class VideoMosaicWindow(QMainWindow):
                     continue
                 speed = done / max(0.01, elapsed)
                 remaining = max(0, total - done) / max(0.01, speed)
-                verb = {"analyze": "解析", "propagate": "自動補完", "mask_save": "マスク適用"}.get(self.job_kind, "書き出し")
+                verb = {"analyze": "解析", "propagate": "自動補完", "mask_save": "マスク適用", "mask_clear": "修正解除"}.get(self.job_kind, "書き出し")
                 self.status.setText(f"{verb}中: {done:,} / 約{total:,}フレーム　{speed:.1f} fps　残り約{time_text(remaining)}")
                 continue
             self.busy = False
@@ -569,8 +611,12 @@ class VideoMosaicWindow(QMainWindow):
                 elif kind == "project_load":
                     self._restore_project(result)
                     self.status.setText(f"編集を復元しました: {result.path.name}")
-                elif kind in {"mask_save", "propagate", "mask_undo"}:
+                elif kind in {"mask_save", "propagate", "mask_undo", "mask_clear"}:
                     self.mask_editor.accept_result(kind, result)
+                    if kind == "mask_save" and self.pending_frame is not None:
+                        target, self.pending_frame = self.pending_frame, None
+                        self.seek(target)
+                        self.mask_editor.begin_edit()
                     self._mark_project_dirty()
                 else:
                     self.last_output = result
@@ -589,9 +635,11 @@ class VideoMosaicWindow(QMainWindow):
                     QTimer.singleShot(0, self.close)
                 continue
             elif event == "cancelled":
+                self.pending_frame = None
                 self.status.setText("処理を中止しました。")
                 self.progress.setValue(0)
             else:
+                self.pending_frame = None
                 self.status.setText(f"処理できませんでした: {payload}")
                 self.progress.setValue(0)
             self._update_controls()
@@ -604,7 +652,6 @@ class VideoMosaicWindow(QMainWindow):
         self.mask_editor.edits, self.mask_editor.can_undo = analysis.cache.edit_state()
         self.project_dirty = bool(self.mask_editor.edits)
         self._update_project_title()
-        self.mask_editor.end.setRange(1, len(analysis.frames))
         self.timeline.set_frames(analysis.frames, float(analysis.info.fps))
         self.timeline.set_edits(self.mask_editor.edits)
         self.timeline.set_window_seconds(self.zoom.currentData())
@@ -712,6 +759,7 @@ class VideoMosaicWindow(QMainWindow):
         self.open_button.setEnabled(not self.busy and not editing)
         self.project_open_button.setEnabled(not self.busy and not editing)
         self.project_save_button.setEnabled(ready)
+        self.project_save_shortcut.setEnabled(ready)
         for control in self.analysis_controls:
             control.setEnabled(not self.busy and not editing)
         self.analyze_button.setEnabled(self.info is not None and not self.busy and not editing)

@@ -17,19 +17,20 @@ import numpy as np
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox
 
 from auto_mosaic.domain import Detection, EffectType
 from auto_mosaic.image_ops import apply_effect
 from auto_mosaic.video_analysis import FrameCache, FrameSummary, VideoAnalysis, export_video
 from auto_mosaic.video_io import VideoCancelled, VideoInfo, decode_frames, encoder_arguments, media_process, probe_video
-from auto_mosaic.video_mask_edit import propagate_mask, save_frame_mask, undo_mask_edit
+from auto_mosaic.video_mask_edit import clear_mask_edits, propagate_mask, save_frame_mask, undo_mask_edit
+from auto_mosaic.video_project import EditorState, load_project, save_project
 from auto_mosaic.video_ui import VideoMosaicWindow
 from tests.test_video import settings
 from tests.test_video_ui import wait_job
 
 
-def make_edit_analysis(directory: Path, *, cut=False):
+def make_edit_analysis(directory: Path, *, cut=False, gaps=()):
     source = directory / "moving-texture.mp4"
     info = VideoInfo(source, 128, 96, Fraction(12), 8 / 12, 8, False, 0, 0, 0)
     texture = np.random.default_rng(13).integers(30, 225, (96, 128, 3), dtype=np.uint8)
@@ -48,8 +49,10 @@ def make_edit_analysis(directory: Path, *, cut=False):
             mask = np.zeros((96, 128), bool)
             mask[50:70, 88 + index * 2:106 + index * 2] = True
             detection = Detection("penis", .9, (88 + index * 2, 50, 106 + index * 2, 70))
-            FrameCache.append(connection, index, image, mask, [detection])
-            result.frames.append(FrameSummary(1))
+            if index in gaps:
+                mask[:] = False
+            FrameCache.append(connection, index, image, mask, [] if index in gaps else [detection])
+            result.frames.append(FrameSummary(0 if index in gaps else 1))
     return result
 
 
@@ -61,6 +64,38 @@ def manual_mask(result, frame):
 
 
 class VideoMaskTests(unittest.TestCase):
+    def test_unedited_start_fills_gap_and_clear_restores_detection_with_undo(self):
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            result = make_edit_analysis(directory, gaps=(2, 3, 4, 5))
+            try:
+                original = result.cache.full_mask(1, result.info)
+                propagated = propagate_mask(result, 1, 5, Event(), lambda *args: None)
+                self.assertEqual(propagated.edited, dict.fromkeys(range(2, 6), "propagated"))
+                for frame in range(2, 6):
+                    self.assertTrue(result.cache.full_mask(frame, result.info).any())
+                np.testing.assert_array_equal(result.cache.full_mask(1, result.info), original)
+                state = EditorState(frame=5, start=1)
+                path = save_project(result, directory / "unedited-start.fyvideo", EffectType.MOSAIC,
+                                    16, state, None, Event(), lambda *args: None)
+                loaded = load_project(path, Event(), lambda *args: None)
+                try:
+                    self.assertEqual(loaded.state, state)
+                finally:
+                    loaded.analysis.close()
+                clear_mask_edits(result, 3, 3, Event(), lambda *args: None)
+                self.assertFalse(result.cache.full_mask(3, result.info).any())
+                self.assertTrue(result.cache.full_mask(4, result.info).any())
+                restored = undo_mask_edit(result, Event(), lambda *args: None)
+                self.assertEqual(restored.edited, propagated.edited)
+                clear_mask_edits(result, 2, 5, Event(), lambda *args: None)
+                self.assertEqual(result.cache.edit_state()[0], {})
+                for frame in range(2, 6):
+                    self.assertFalse(result.cache.full_mask(frame, result.info).any())
+                np.testing.assert_array_equal(result.cache.full_mask(1, result.info), original)
+            finally:
+                result.close()
+
     def test_follow_range_erasures_export_and_undo(self):
         with TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -124,6 +159,103 @@ class VideoMaskUiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
         QFontDatabase.addApplicationFont("C:/Windows/Fonts/meiryo.ttc")
 
+    def test_arrows_from_controls_and_editing_keep_masks_and_settings(self):
+        with TemporaryDirectory() as temporary:
+            result = make_edit_analysis(Path(temporary))
+            window = VideoMosaicWindow()
+            window.show()
+            window._set_analysis(result)
+            window._update_controls()
+            editor = window.mask_editor
+            try:
+                window.seek(1)
+                original_settings = window._config_values()
+                for control in (window.preview, window.timeline, window.seek_slider,
+                                window.threshold_slider, window.mode, editor.start_button, window.change_table):
+                    control.setFocus()
+                    QTest.keyClick(control, Qt.Key.Key_Right)
+                    self.assertEqual(window.current_frame, 2, type(control).__name__)
+                    QTest.keyClick(control, Qt.Key.Key_Left)
+                    self.assertEqual(window.current_frame, 1, type(control).__name__)
+                self.assertEqual(window._config_values(), original_settings)
+                editor.begin_edit()
+                editor.draft[20:30, 20:30] = True
+                editor.dirty = True
+                expected = editor.draft.copy()
+                QTest.keyClick(editor.brush, Qt.Key.Key_Right)
+                wait_job(self.app, window)
+                self.assertEqual(window.current_frame, 2)
+                self.assertTrue(editor.active)
+                self.assertFalse(editor.dirty)
+                np.testing.assert_array_equal(result.cache.full_mask(1, result.info), expected)
+                QTest.keyClick(editor.brush, Qt.Key.Key_Left)
+                self.assertEqual(window.current_frame, 1)
+                np.testing.assert_array_equal(editor.draft, expected)
+                self.assertEqual(editor.brush.value(), 40)
+                dialog = QDialog(window)
+                field = QLineEdit('abc', dialog)
+                dialog.setModal(True)
+                dialog.show()
+                field.setFocus()
+                self.app.processEvents()
+                QTest.keyClick(field, Qt.Key.Key_Left)
+                self.assertEqual(window.current_frame, 1)
+                dialog.close()
+            finally:
+                with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Discard):
+                    window.close()
+
+    def test_selected_range_keyframe_clear_and_project_reopen(self):
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            result = make_edit_analysis(directory, gaps=(2, 4, 5))
+            save_frame_mask(result, 3, manual_mask(result, 3), Event(), lambda *args: None)
+            window = VideoMosaicWindow()
+            window.show()
+            window._set_analysis(result)
+            window._update_controls()
+            editor = window.mask_editor
+            try:
+                window.seek(1)
+                editor.start_button.click()
+                self.assertEqual(editor.start, 1)
+                self.assertNotIn(1, editor.edits)
+                window.seek(0)
+                self.assertIsNone(window.timeline.propagation_range)
+                self.assertFalse(editor.propagate_button.isEnabled())
+                window.seek(5)
+                self.assertEqual(window.timeline.propagation_start, 1)
+                self.assertEqual(window.timeline.propagation_range, (2, 5))
+                self.assertFalse(editor.propagate_button.isEnabled(), "manual frame in range is protected")
+                self.assertIn("フレーム 4", editor.range_label.text())
+                window.seek(3)
+                editor.clear_frame_button.click()
+                wait_job(self.app, window)
+                self.assertNotIn(3, editor.edits)
+                self.assertEqual(editor.start, 1)
+                window.seek(5)
+                self.assertTrue(editor.propagate_button.isEnabled())
+                editor.propagate_button.click()
+                wait_job(self.app, window)
+                self.assertEqual(editor.edits, dict.fromkeys(range(2, 6), "propagated"))
+                path = directory / "selection.fyvideo"
+                window.save_project_to(path)
+                wait_job(self.app, window)
+                window.load_project_from(path, confirmed=True)
+                wait_job(self.app, window)
+                self.assertEqual(window.current_frame, 5)
+                self.assertEqual(window.timeline.propagation_start, 1)
+                self.assertEqual(window.timeline.propagation_range, (2, 5))
+                editor.clear_range_button.click()
+                wait_job(self.app, window)
+                self.assertEqual(editor.edits, {})
+                editor.undo_button.click()
+                wait_job(self.app, window)
+                self.assertEqual(editor.edits, dict.fromkeys(range(2, 6), "propagated"))
+            finally:
+                with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Discard):
+                    window.close()
+
     def test_brush_zoom_commit_follow_review_and_loss_guards(self):
         with TemporaryDirectory() as temporary:
             result = make_edit_analysis(Path(temporary))
@@ -162,8 +294,7 @@ class VideoMaskUiTests(unittest.TestCase):
                 self.assertTrue(window.export_button.isEnabled())
                 self.assertEqual(editor.start, 1)
                 window.seek(5)
-                editor.end_button.click()
-                self.assertEqual(editor.end.value(), 6)
+                self.assertEqual(editor.propagation_range, (2, 5))
                 editor.propagate_button.click()
                 wait_job(self.app, window)
                 self.assertEqual(editor.edits.get(5), "propagated", window.status.text())

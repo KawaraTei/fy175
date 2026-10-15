@@ -38,7 +38,6 @@ def main():
     window.mask_editor.apply_button.click()
     wait_job(app, window)
     window.seek(5)
-    window.mask_editor.end_button.click()
     window.mask_editor.propagate_button.click()
     wait_job(app, window)
     window.effect_size.setValue(28)

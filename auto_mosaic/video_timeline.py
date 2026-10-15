@@ -63,6 +63,8 @@ class MaskCountTimeline(QWidget):
         self.window_seconds = 0
         self.start = 0
         self.edits = {}
+        self.propagation_start = None
+        self.propagation_range = None
         self.setMinimumHeight(140)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -81,6 +83,10 @@ class MaskCountTimeline(QWidget):
         self.edits = dict(edits)
         self.update()
 
+    def set_propagation(self, start, bounds):
+        self.propagation_start, self.propagation_range = start, bounds
+        self.update()
+
     def set_window_seconds(self, seconds: int):
         self.window_seconds = seconds
         self.start = max(0, min(self.current - self.span // 2, len(self.counts) - self.span))
@@ -93,7 +99,7 @@ class MaskCountTimeline(QWidget):
         self.update()
 
     def plot_rect(self):
-        return QRectF(36, 18, max(1, self.width() - 52), max(1, self.height() - 48))
+        return QRectF(36, 38, max(1, self.width() - 52), max(1, self.height() - 68))
 
     def frame_at(self, x):
         rect = self.plot_rect()
@@ -171,6 +177,32 @@ class MaskCountTimeline(QWidget):
                 painter.fillRect(QRectF(x, rect.top() - 12, max(2, rect.width() / self.span), 5), QColor("#63d6a3"))
                 if kind == "manual":
                     painter.fillRect(QRectF(x, rect.top() - 14, 3, 9), QColor("#d4ffe9"))
+        # The yellow lane is prospective; the green lane above the graph is committed.
+        # Use frame edges for the inclusive affected range and centers for cursors.
+        if self.propagation_start is not None:
+            color = QColor("#f1d36b")
+            bounds = self.propagation_range
+            if bounds is not None:
+                first = max(bounds[0], self.start)
+                stop = min(bounds[1] + 1, self.start + self.span)
+                if first < stop:
+                    left = rect.left() + (first - self.start) / self.span * rect.width()
+                    width = (stop - first) / self.span * rect.width()
+                    painter.fillRect(QRectF(left, 18, width, 5), color)
+                    painter.fillRect(QRectF(left, rect.top(), width, rect.height()), QColor(241, 211, 107, 38))
+            source = self.propagation_start
+            offscreen = "← " if source < self.start else "→ " if source >= self.start + self.span else ""
+            label = f"{offscreen}始点 {source + 1}"
+            if bounds is not None:
+                label += f"　補完予定 {bounds[0] + 1}～{bounds[1] + 1}"
+            painter.setPen(color)
+            painter.drawText(QRectF(rect.left(), 0, rect.width(), 17), Qt.AlignmentFlag.AlignLeft, label)
+            source_x = rect.left() + (source - self.start + .5) / self.span * rect.width()
+            source_x = max(rect.left(), min(rect.right(), source_x))
+            painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(source_x, 18), QPointF(source_x, rect.bottom()))
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(source_x, 20), 4, 4)
         x = rect.left() + (self.current - self.start + 0.5) / self.span * rect.width()
         painter.setPen(QPen(QColor("#ffffff"), 2))
-        painter.drawLine(QPointF(x, rect.top() - 5), QPointF(x, rect.bottom()))
+        painter.drawLine(QPointF(x, 23), QPointF(x, rect.bottom()))

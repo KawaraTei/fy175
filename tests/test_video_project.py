@@ -14,8 +14,9 @@ from threading import Event
 from unittest.mock import patch
 
 import numpy as np
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QFontDatabase
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from auto_mosaic.domain import EffectType
@@ -44,7 +45,7 @@ class VideoProjectTests(unittest.TestCase):
                 expected = [analysis.cache.full_mask(i, analysis.info) for i in range(8)]
                 draft = expected[5].copy()
                 draft[0:10, 0:10] = True
-                state = EditorState(5, "処理結果", 1, 1, 12, 1, 5, True)
+                state = EditorState(5, "処理結果", 1, 1, 12, 1, True)
                 path = save_project(analysis, directory / "編集.fyvideo", EffectType.BLUR, 28, state, draft, Event(), progress)
                 before = export_video(analysis, directory / "before.mp4", EffectType.BLUR, 28, Event(), progress)
                 frames, edits = list(analysis.frames), analysis.cache.edit_state()
@@ -160,10 +161,20 @@ class VideoProjectUiTests(unittest.TestCase):
                 expected = window.mask_editor.draft.copy()
                 self.assertTrue(window.project_dirty)
                 with patch.object(QFileDialog, "getSaveFileName", return_value=(str(path), "")):
-                    window.project_save_button.click()
+                    window.activateWindow()
+                    window.mask_editor.brush.setFocus()
+                    self.app.processEvents()
+                    QTest.keyClick(window.mask_editor.brush, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
                     wait_job(self.app, window)
                 self.assertEqual(window.project_path, path)
                 self.assertFalse(window.project_dirty)
+                with patch.object(QFileDialog, "getSaveFileName", return_value=("", "")) as dialog:
+                    window.project_save_button.click()
+                    button_call = dialog.call_args
+                    dialog.reset_mock()
+                    QTest.keyClick(window.mask_editor.brush, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+                    self.assertEqual(dialog.call_args, button_call)
+                    dialog.assert_called_once()
                 with patch.object(QMessageBox, "warning", side_effect=AssertionError("saved edits must not prompt")):
                     window.close()
                 window.show()

@@ -132,7 +132,7 @@ def _warp(mask, flow):
 
 def propagate_mask(analysis: VideoAnalysis, start: int, end: int,
                    cancel: Event, progress) -> MaskEditResult:
-    """Follow a committed manual mask, preserving other automatic detections.
+    """Follow the effective start mask, preserving other automatic detections.
 
     The tracked mask is added to each reviewed frame and tracked manual erasures
     are removed. Nothing commits on cancellation, a cut, or unreliable flow.
@@ -143,9 +143,6 @@ def propagate_mask(analysis: VideoAnalysis, start: int, end: int,
     started = time.perf_counter()
     shape = (analysis.info.height, analysis.info.width)
     with closing(sqlite3.connect(analysis.cache.path)) as connection, connection:
-        kind = connection.execute("SELECT kind FROM mask_edits WHERE frame=?", (start,)).fetchone()
-        if kind is None or kind[0] != "manual":
-            raise ValueError("始点のマスクを手動編集し、適用してから補完してください。")
         protected = connection.execute("SELECT frame FROM mask_edits WHERE frame>? AND frame<=? AND kind='manual' LIMIT 1",
                                        (start, end)).fetchone()
         if protected:
@@ -169,6 +166,21 @@ def propagate_mask(analysis: VideoAnalysis, start: int, end: int,
         check_cancel(cancel)
         analysis.info.verify_source()
     return _result(analysis, start + 1, end)
+
+
+def clear_mask_edits(analysis: VideoAnalysis, start: int, end: int,
+                     cancel: Event, progress) -> MaskEditResult:
+    """Restore original detections in the range, retaining one-step undo."""
+    _validate(analysis, start, end)
+    started = time.perf_counter()
+    with closing(sqlite3.connect(analysis.cache.path)) as connection, connection:
+        check_cancel(cancel)
+        _snapshot(connection, start, end)
+        connection.execute("DELETE FROM mask_edits WHERE frame BETWEEN ? AND ?", (start, end))
+        progress(end - start + 1, end - start + 1, time.perf_counter() - started)
+        check_cancel(cancel)
+        analysis.info.verify_source()
+    return _result(analysis, start, end)
 
 
 def undo_mask_edit(analysis: VideoAnalysis, cancel: Event, progress) -> MaskEditResult:

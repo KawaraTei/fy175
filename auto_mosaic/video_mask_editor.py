@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 
 from auto_mosaic.image_ops import paint_mask_stroke
 from auto_mosaic.ui_style import section_label
-from auto_mosaic.video_mask_edit import propagate_mask, save_frame_mask, undo_mask_edit
+from auto_mosaic.video_mask_edit import clear_mask_edits, propagate_mask, save_frame_mask, undo_mask_edit
 from auto_mosaic.video_timeline import time_text
 
 
@@ -44,7 +44,7 @@ class VideoMaskEditor(QWidget):
         self.brush.setValue(40)
         self.brush.valueChanged.connect(self.update_brush)
         layout.addWidget(self.brush)
-        hint = QLabel("ドラッグで追加 / Alt＋ドラッグで削除\nホイールで拡大・縮小")
+        hint = QLabel("ドラッグで追加 / Alt＋ドラッグで削除\nホイールで拡大・縮小 / ← →で適用・移動")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -56,6 +56,10 @@ class VideoMaskEditor(QWidget):
         actions.addWidget(self.apply_button, 1)
         actions.addWidget(self.discard_button)
         layout.addLayout(actions)
+        self.clear_frame_button = QPushButton("このフレームの修正を解除")
+        self.clear_frame_button.setToolTip("手動編集・補完を解除し、元の自動検出結果に戻します。")
+        self.clear_frame_button.clicked.connect(self.clear_frame)
+        layout.addWidget(self.clear_frame_button)
         layout.addSpacing(8)
         layout.addWidget(section_label("自動補完"))
         self.start_label = QLabel("始点: 未指定")
@@ -64,30 +68,17 @@ class VideoMaskEditor(QWidget):
         self.start_button = QPushButton("現在位置を始点にする")
         self.start_button.clicked.connect(self.set_start)
         layout.addWidget(self.start_button)
-        end_row = QHBoxLayout()
-        end_row.addWidget(QLabel("終点"))
-        self.end = QSpinBox()
-        self.end.setRange(1, 1)
-        self.end.setSuffix(" フレーム")
-        self.end.setKeyboardTracking(False)
-        self.end.setAccessibleName("補完する終了フレーム")
-        self.end.valueChanged.connect(self.update_controls)
-        end_row.addWidget(self.end, 1)
-        layout.addLayout(end_row)
-        self.end_time = QLabel("00:00.000")
-        self.end_time.setObjectName("value")
-        self.end_time.setAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(self.end_time)
-        self.end_button = QPushButton("現在位置を終点にする")
-        self.end_button.clicked.connect(lambda: self.end.setValue(self.window.current_frame + 1))
-        layout.addWidget(self.end_button)
-        note = QLabel("補完マスクは検出結果に追加します。手動で消した領域も追従します。補完後に範囲内を確認してください。")
-        note.setWordWrap(True)
-        note.setObjectName("muted")
-        layout.addWidget(note)
-        self.propagate_button = QPushButton("指定フレームまで自動補完")
+        self.range_label = QLabel("")
+        self.range_label.setWordWrap(True)
+        layout.addWidget(self.range_label)
+        self.propagate_button = QPushButton("補完")
+        self.propagate_button.setToolTip("始点の次から現在のフレームまで、マスクを動きに追従させて検出結果へ追加します。\n手動で消した領域も追従します。補完後は範囲内を確認してください。")
         self.propagate_button.clicked.connect(self.propagate)
         layout.addWidget(self.propagate_button)
+        self.clear_range_button = QPushButton("補完範囲の修正を解除")
+        self.clear_range_button.setToolTip("表示中の補完範囲の手動編集・補完を、元の自動検出結果に戻します。始点は変更しません。")
+        self.clear_range_button.clicked.connect(self.clear_range)
+        layout.addWidget(self.clear_range_button)
         layout.addSpacing(8)
         self.undo_button = QPushButton("直前のマスク変更を戻す")
         self.undo_button.clicked.connect(self.undo)
@@ -101,11 +92,18 @@ class VideoMaskEditor(QWidget):
     def active(self):
         return self.draft is not None
 
+    @property
+    def propagation_range(self):
+        if self.start is not None and self.window.current_frame > self.start:
+            return self.start + 1, self.window.current_frame
+        return None
+
     def reset(self):
         self.draft, self.dirty = None, False
         self.edits, self.can_undo, self.start = {}, False, None
         self.window.preview.set_mask_editing(False)
         self.window.timeline.set_edits({})
+        self.window.timeline.set_propagation(None, None)
 
     def begin_edit(self):
         window = self.window
@@ -121,7 +119,7 @@ class VideoMaskEditor(QWidget):
         window.view_mode.setCurrentText("検出範囲")
         window._render_preview()
         window._update_controls()
-        window.status.setText("マスク編集中: ドラッグで追加 / Alt＋ドラッグで削除。適用してからフレームを移動してください。")
+        window.status.setText("マスク編集中: ドラッグで追加 / Alt＋ドラッグで削除。左右キーで現在の変更を適用して移動します。")
 
     def update_brush(self):
         self.brush_value.setText(f"{self.brush.value()} px")
@@ -181,18 +179,34 @@ class VideoMaskEditor(QWidget):
             QMessageBox.StandardButton.Cancel) == QMessageBox.StandardButton.Discard
 
     def set_start(self):
-        frame = self.window.current_frame
-        if self.edits.get(frame) == "manual":
-            self.start = frame
-            self.end.setRange(min(frame + 2, len(self.window.analysis.frames)), len(self.window.analysis.frames))
+        if self.window.analysis is not None and not self.window.busy and not self.active:
+            self.window._stop_play()
+            self.start = self.window.current_frame
+            self.window._mark_project_dirty()
             self.update_controls()
 
     def propagate(self):
         window = self.window
-        if window.busy or self.active or self.start is None:
+        if window.busy or self.active or self.propagation_range is None:
             return
-        analysis, start, end = window.analysis, self.start, self.end.value() - 1
+        analysis, start, end = window.analysis, self.start, self.propagation_range[1]
         window._start_job("propagate", lambda cancel, progress: propagate_mask(analysis, start, end, cancel, progress))
+
+    def clear_frame(self):
+        self._clear(self.window.current_frame, self.window.current_frame)
+
+    def clear_range(self):
+        if self.propagation_range is not None:
+            self._clear(*self.propagation_range)
+
+    def _clear(self, start, end):
+        window = self.window
+        if window.busy or self.active or window.analysis is None:
+            return
+        if not any(start <= frame <= end for frame in self.edits):
+            return
+        analysis = window.analysis
+        window._start_job("mask_clear", lambda cancel, progress: clear_mask_edits(analysis, start, end, cancel, progress))
 
     def undo(self):
         window = self.window
@@ -206,15 +220,14 @@ class VideoMaskEditor(QWidget):
         if kind == "mask_save":
             self.draft, self.dirty = None, False
             self.start = result.start
-            self.end.setRange(min(result.start + 2, len(window.analysis.frames)), len(window.analysis.frames))
-        elif self.start is not None and self.edits.get(self.start) != "manual":
-            self.start = None
         window.timeline.set_edits(self.edits)
         window.seek(window.current_frame)
         if kind == "propagate":
             window.status.setText(f"フレーム {result.start + 1}～{result.end + 1} に補完しました。タイムラインで確認してください。")
         elif kind == "mask_save":
-            window.status.setText(f"フレーム {result.start + 1} のマスクを適用しました。終点を指定すると動きに追従して補完できます。")
+            window.status.setText(f"フレーム {result.start + 1} のマスクを適用しました。後のフレームへ移動して「補完」を押せます。")
+        elif kind == "mask_clear":
+            window.status.setText(f"フレーム {result.start + 1}～{result.end + 1} の修正を解除し、自動検出結果に戻しました。")
         else:
             window.status.setText("直前のマスク変更を戻しました。")
 
@@ -227,15 +240,21 @@ class VideoMaskEditor(QWidget):
         self.apply_button.setEnabled(ready and self.active)
         self.discard_button.setEnabled(ready and self.active)
         idle = ready and not self.active
-        self.start_button.setEnabled(idle and self.edits.get(window.current_frame) == "manual")
-        valid_start = self.start is not None and window.analysis is not None and self.start < len(window.analysis.frames) - 1
-        self.end.setEnabled(idle and valid_start)
-        self.end_button.setEnabled(idle and valid_start and window.current_frame > self.start)
-        self.propagate_button.setEnabled(idle and valid_start and self.end.value() > self.start + 1)
+        self.start_button.setEnabled(idle)
+        bounds = self.propagation_range
+        protected = next((frame for frame, kind in sorted(self.edits.items())
+                          if bounds and bounds[0] <= frame <= bounds[1] and kind == "manual"), None)
+        self.propagate_button.setEnabled(idle and bounds is not None and protected is None)
+        self.clear_frame_button.setEnabled(idle and window.current_frame in self.edits)
+        self.clear_range_button.setEnabled(idle and bounds is not None and
+                                          any(bounds[0] <= frame <= bounds[1] for frame in self.edits))
         self.undo_button.setEnabled(idle and self.can_undo)
-        if window.info:
-            self.end_time.setText(time_text((self.end.value() - 1) / float(window.info.fps)))
-        self.start_label.setText(f"始点: {self.start + 1} フレーム / {time_text(self.start / float(window.info.fps))}" if self.start is not None else "始点: 未指定（編集・適用後に設定）")
+        self.start_label.setText(f"始点: {self.start + 1} フレーム / {time_text(self.start / float(window.info.fps))}" if self.start is not None else "始点: 未指定")
+        self.range_label.setText(
+            f"補完範囲: {bounds[0] + 1}～{bounds[1] + 1} フレーム（{bounds[1] - bounds[0] + 1}枚）"
+            + (f"\nフレーム {protected + 1} の手動修正を解除するか、その手前を選択してください。" if protected is not None else "")
+            if bounds else "始点より後のフレームを選択してください。" if self.start is not None else "基準にするフレームで始点を指定してください。")
+        window.timeline.set_propagation(self.start, bounds)
         manual = sum(kind == "manual" for kind in self.edits.values())
         propagated = len(self.edits) - manual
         self.edit_summary.setText(f"緑: 手動 {manual} / 補完 {propagated} フレーム" if self.edits else "手動編集・補完なし")

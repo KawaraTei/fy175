@@ -35,7 +35,15 @@ in Qt's official list:
 - https://doc.qt.io/qt-6/licenses-used-in-qt.html
 - https://doc.qt.io/qt-6/qtmodules.html
 
-The exact pinned Python dependencies are listed in `requirements.txt`.
+The shared Python dependencies are listed in `requirements-common.txt`; CPU and
+GPU runtime selections are in `requirements.txt` and `requirements-gpu.txt`.
+Local GPU builds additionally include NVIDIA CUDA 13 and cuDNN 9 runtime DLLs
+under NVIDIA's proprietary SDK license terms. Exact installed versions are
+recorded in `GPU_RUNTIME.txt`, and their original wheel license files are copied
+to `LICENSES/nvidia-*/`. These components are not covered by the application's
+AGPL license. Review their distribution terms and compatibility with the
+application license before publishing a GPU binary; the local build is not a
+completed redistribution review.
 
 ## Models and model tooling
 

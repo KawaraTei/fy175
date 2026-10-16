@@ -4,24 +4,17 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 
 from auto_mosaic.domain import ProcessingSettings
+from auto_mosaic.inference import create_session
 
 
 class Sam2OnnxSegmenter:
     """SAM2 ONNX segmentation using box or point prompts."""
 
     def __init__(self, encoder_path: Path, decoder_path: Path) -> None:
-        providers = ["CPUExecutionProvider"]
-        options = ort.SessionOptions()
-        options.log_severity_level = 3
-        self.encoder = ort.InferenceSession(
-            str(encoder_path), sess_options=options, providers=providers
-        )
-        self.decoder = ort.InferenceSession(
-            str(decoder_path), sess_options=options, providers=providers
-        )
+        self.encoder = create_session(encoder_path)
+        self.decoder = create_session(decoder_path)
         encoder_input = self.encoder.get_inputs()[0]
         self.encoder_input_name = encoder_input.name
         shape = encoder_input.shape

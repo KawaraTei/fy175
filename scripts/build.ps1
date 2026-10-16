@@ -1,4 +1,4 @@
-param([switch]$UseExistingEnvironment)
+param([switch]$UseExistingEnvironment, [switch]$Gpu)
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -9,10 +9,14 @@ if (-not (Test-Path '.venv\Scripts\python.exe')) {
 }
 
 if (-not $UseExistingEnvironment) {
-    & '.venv\Scripts\python.exe' -m pip install -r requirements.txt
-    if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
-    & '.venv\Scripts\python.exe' scripts\download_models.py
-    if ($LASTEXITCODE -ne 0) { throw 'Model download failed.' }
+    & "$PSScriptRoot\setup.ps1" -Gpu:$Gpu
+}
+$HasCudaRuntime = & '.venv\Scripts\python.exe' -c "import onnxruntime as ort; print(int('CUDAExecutionProvider' in ort.get_available_providers()))"
+if ($LASTEXITCODE -ne 0) { throw 'ONNX Runtime inspection failed.' }
+if ($Gpu -and $HasCudaRuntime -ne '1') { throw 'GPU build requires scripts\setup.ps1 -Gpu.' }
+$GpuArguments = @()
+if ($HasCudaRuntime -eq '1') {
+    $GpuArguments = @('--collect-binaries', 'nvidia.cu13', '--collect-binaries', 'nvidia.cudnn')
 }
 & '.venv\Scripts\python.exe' scripts\build_icon.py
 if ($LASTEXITCODE -ne 0) { throw 'Application icon generation failed.' }
@@ -35,6 +39,7 @@ try {
         --add-data 'assets\app.ico;assets' `
         --add-binary "$FfmpegExecutable;ffmpeg" `
         --add-binary "$FfprobeExecutable;ffmpeg" `
+        @GpuArguments `
         auto_mosaic\app.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE."
@@ -52,6 +57,10 @@ Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination 'dist\FY175AutoMosa
 Copy-Item -LiteralPath 'MODEL_LICENSES.md' -Destination 'dist\FY175AutoMosaic\MODEL_LICENSES.md' -Force
 Copy-Item -LiteralPath 'DISTRIBUTION.md' -Destination 'dist\FY175AutoMosaic\DISTRIBUTION.md' -Force
 Copy-Item -LiteralPath 'LICENSES' -Destination 'dist\FY175AutoMosaic\LICENSES' -Recurse -Force
+if ($HasCudaRuntime -eq '1') {
+    & '.venv\Scripts\python.exe' scripts\copy_gpu_notices.py 'dist\FY175AutoMosaic'
+    if ($LASTEXITCODE -ne 0) { throw 'GPU dependency notice collection failed.' }
+}
 & $FfmpegExecutable -version | Out-File -LiteralPath 'dist\FY175AutoMosaic\FFMPEG_BUILD.txt' -Encoding utf8
 Get-FileHash -Algorithm SHA256 -LiteralPath $FfmpegExecutable, $FfprobeExecutable |
     Format-List | Out-File -LiteralPath 'dist\FY175AutoMosaic\FFMPEG_BUILD.txt' -Append -Encoding utf8

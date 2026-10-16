@@ -4,10 +4,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 
 from auto_mosaic.domain import Detection
 from auto_mosaic.model_catalog import DetectorSpec
+from auto_mosaic.inference import create_session
 
 
 BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE = 0.1
@@ -16,9 +16,7 @@ BELOW_THRESHOLD_PREVIEW_MIN_CONFIDENCE = 0.1
 class YoloOnnxDetector:
     def __init__(self, model_path: Path, spec: DetectorSpec) -> None:
         self.spec = spec
-        self.session = ort.InferenceSession(
-            str(model_path), providers=["CPUExecutionProvider"]
-        )
+        self.session = create_session(model_path)
         model_input = self.session.get_inputs()[0]
         self.input_name = model_input.name
         shape = model_input.shape

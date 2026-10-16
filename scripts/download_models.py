@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
-import shutil
+import io
 import sys
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +40,12 @@ DOWNLOADS = (
 
 NUDENET_FILENAME = "nudenet-320n.onnx"
 NUDENET_SHA256 = "c15d8273adad2d0a92f014cc69ab2d6c311a06777a55545f2c4eb46f51911f0f"
+NUDENET_WHEEL_URL = (
+    "https://files.pythonhosted.org/packages/1c/ee/"
+    "1aa02d44ba958cc77e16ff1e41a0aac5e721037db7bf62b9c9d124917f87/"
+    "nudenet-3.4.2-py3-none-any.whl"
+)
+NUDENET_WHEEL_SHA256 = "5937dbd84e5d8e5de038f08ffea5a1bb50a08475776bf2b4795914ce0eaf0331"
 
 
 def file_sha256(path: Path) -> str:
@@ -80,27 +86,30 @@ def download(item: Download) -> None:
     temporary.replace(destination)
 
 
-def copy_nudenet_model() -> None:
+def download_nudenet_model() -> None:
     destination = MODEL_DIR / NUDENET_FILENAME
     if destination.exists() and file_sha256(destination) == NUDENET_SHA256:
         print(f"[skip] {NUDENET_FILENAME}")
         return
-    package = importlib.util.find_spec("nudenet")
-    if package is None or package.origin is None:
-        raise RuntimeError("nudenet package is not installed. Run pip install -r requirements.txt")
-    source = Path(package.origin).resolve().parent / "320n.onnx"
-    if not source.exists():
-        raise RuntimeError(f"NudeNet model was not found: {source}")
-    if file_sha256(source) != NUDENET_SHA256:
+    # Extract only the pinned model, without installing NudeNet's CPU runtime dependency.
+    print(f"[download] {NUDENET_FILENAME}")
+    with urllib.request.urlopen(NUDENET_WHEEL_URL, timeout=60) as response:
+        wheel = response.read()
+    if hashlib.sha256(wheel).hexdigest() != NUDENET_WHEEL_SHA256:
+        raise RuntimeError("NudeNet wheel SHA-256 did not match the expected file")
+    with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
+        model = archive.read("nudenet/320n.onnx")
+    if hashlib.sha256(model).hexdigest() != NUDENET_SHA256:
         raise RuntimeError("Bundled NudeNet model SHA-256 did not match the expected file")
-    print(f"[copy] {NUDENET_FILENAME}")
-    shutil.copy2(source, destination)
+    temporary = destination.with_suffix(".onnx.part")
+    temporary.write_bytes(model)
+    temporary.replace(destination)
 
 
 def main() -> int:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        copy_nudenet_model()
+        download_nudenet_model()
         for item in DOWNLOADS:
             download(item)
     except Exception as error:

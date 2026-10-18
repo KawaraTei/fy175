@@ -11,8 +11,8 @@ from threading import Event
 from unittest.mock import patch
 
 import numpy as np
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QFontDatabase, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -61,6 +61,29 @@ class VideoUiTests(unittest.TestCase):
                     wait_job(self.app, window)
                 self.assertTrue(window.export_button.isEnabled(), window.status.text())
                 self.assertEqual(window.change_model.rowCount(), 6)
+                self.assertTrue(window.count_visible.isChecked())
+                self.assertTrue(window.area_visible.isChecked())
+                self.assertEqual(window.timeline.areas[0], 0)
+                mask = window.analysis.cache.full_mask(15, window.info)
+                self.assertAlmostEqual(window.timeline.areas[15], 100 * np.count_nonzero(mask) / mask.size)
+                window.count_visible.click()
+                self.assertFalse(window.timeline.show_counts)
+                self.assertTrue(window.timeline.show_areas)
+                window.area_visible.click()
+                self.assertFalse(window.timeline.show_areas)
+                window.count_visible.click()
+                window.area_visible.click()
+                position = window.timeline.plot_rect().center()
+                old_span = window.timeline.span
+                old_anchor = window.timeline.frame_at(position.x())
+                wheel = QWheelEvent(position, QPointF(window.timeline.mapToGlobal(position.toPoint())),
+                                    QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton,
+                                    Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+                self.app.sendEvent(window.timeline, wheel)
+                self.assertLess(window.timeline.span, old_span)
+                self.assertLessEqual(abs(window.timeline.frame_at(position.x()) - old_anchor), 1)
+                self.assertEqual(window.zoom.currentData(), window.timeline.window_seconds)
+                window.zoom.setCurrentIndex(0)
                 window.seek(23)
                 window.next_change.click()
                 self.assertEqual(window.current_frame, 24)

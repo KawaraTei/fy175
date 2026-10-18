@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from auto_mosaic.video_analysis import DetectionChange, FrameSummary
@@ -54,10 +54,13 @@ class ChangeTableModel(QAbstractTableModel):
 
 class MaskCountTimeline(QWidget):
     frame_requested = Signal(int)
+    window_changed = Signal(float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.counts = np.empty(0, np.int32)
+        self.areas = np.empty(0, float)
+        self.show_counts = self.show_areas = True
         self.fps = 1.0
         self.current = 0
         self.window_seconds = 0
@@ -68,10 +71,11 @@ class MaskCountTimeline(QWidget):
         self.setMinimumHeight(140)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setAccessibleName("時点ごとの検出マスク数")
+        self.setAccessibleName("時点ごとの検出マスク数と検出面積")
 
-    def set_frames(self, frames: list[FrameSummary], fps: float):
+    def set_frames(self, frames: list[FrameSummary], fps: float, areas=None):
         self.counts = np.array([frame.count for frame in frames], dtype=np.int32)
+        self.areas = np.asarray(areas if areas is not None else np.zeros(len(frames)), dtype=float)
         self.fps, self.current, self.start = fps, 0, 0
         self.update()
 
@@ -87,7 +91,11 @@ class MaskCountTimeline(QWidget):
         self.propagation_start, self.propagation_range = start, bounds
         self.update()
 
-    def set_window_seconds(self, seconds: int):
+    def set_series_visible(self, counts: bool, areas: bool):
+        self.show_counts, self.show_areas = counts, areas
+        self.update()
+
+    def set_window_seconds(self, seconds: float):
         self.window_seconds = seconds
         self.start = max(0, min(self.current - self.span // 2, len(self.counts) - self.span))
         self.update()
@@ -99,7 +107,24 @@ class MaskCountTimeline(QWidget):
         self.update()
 
     def plot_rect(self):
-        return QRectF(36, 38, max(1, self.width() - 52), max(1, self.height() - 68))
+        return QRectF(36, 38, max(1, self.width() - 96), max(1, self.height() - 68))
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y() or event.pixelDelta().y()
+        if not len(self.counts) or not delta:
+            event.ignore()
+            return
+        rect = self.plot_rect()
+        fraction = max(0.0, min(1.0, (event.position().x() - rect.left()) / rect.width()))
+        anchor = self.start + fraction * self.span
+        span = max(1, min(len(self.counts), round(self.span * (0.8 if delta > 0 else 1.25))))
+        if span == self.span:
+            span = max(1, min(len(self.counts), span + (-1 if delta > 0 else 1)))
+        self.window_seconds = 0 if span == len(self.counts) else span / self.fps
+        self.start = max(0, min(len(self.counts) - span, round(anchor - fraction * span)))
+        self.window_changed.emit(self.window_seconds)
+        self.update()
+        event.accept()
 
     def frame_at(self, x):
         rect = self.plot_rect()
@@ -118,7 +143,7 @@ class MaskCountTimeline(QWidget):
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.frame_requested.emit(frame)
         QToolTip.showText(event.globalPosition().toPoint(),
-                         f"{time_text(frame / self.fps)}  検出マスク {self.counts[frame]}件  / フレーム {frame + 1}"
+                         f"{time_text(frame / self.fps)}  検出マスク {self.counts[frame]}件  面積 {self.areas[frame]:.2f}%  / フレーム {frame + 1}"
                          + (" / 手動編集" if self.edits.get(frame) == "manual" else " / 自動補完" if frame in self.edits else ""), self)
 
     def keyPressEvent(self, event):
@@ -134,7 +159,7 @@ class MaskCountTimeline(QWidget):
         rect = self.plot_rect()
         if not len(self.counts):
             painter.setPen(QColor("#aab2c2"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "解析後にマスク数を表示します")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "解析後にマスク数・面積を表示します")
             return
         visible = self.counts[self.start:self.start + self.span]
         maximum = max(1, int(self.counts.max()))
@@ -143,11 +168,12 @@ class MaskCountTimeline(QWidget):
             painter.setPen(QColor("#303744"))
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
             painter.setPen(QColor("#b8c0cf"))
-            painter.drawText(QRectF(0, y - 9, 28, 18), Qt.AlignmentFlag.AlignRight, str(value))
+            if self.show_counts:
+                painter.drawText(QRectF(0, y - 9, 28, 18), Qt.AlignmentFlag.AlignRight, str(value))
         # Aggregate min AND max per screen pixel, so narrow dropouts are not
         # erased by averaging or by drawing only the maximum count.
         columns = min(max(1, int(rect.width())), len(visible))
-        for column in range(columns):
+        for column in range(columns if self.show_counts else 0):
             left = column * len(visible) // columns
             right = max(left + 1, (column + 1) * len(visible) // columns)
             minimum, peak = int(visible[left:right].min()), int(visible[left:right].max())
@@ -164,6 +190,30 @@ class MaskCountTimeline(QWidget):
                 painter.setPen(QColor("#ffbc70"))
                 painter.drawLine(QPointF(x, rect.bottom() - peak / maximum * rect.height()),
                                  QPointF(x, rect.bottom() - minimum / maximum * rect.height()))
+        if self.show_areas:
+            area_max = max(1.0, float(self.areas.max()))
+            painter.setPen(QPen(QColor("#ee91d7"), 2))
+            path = QPainterPath()
+            visible_areas = self.areas[self.start:self.start + self.span]
+            # Retain extrema in time order at each screen pixel, including short dropouts.
+            for column in range(columns):
+                first = column * len(visible_areas) // columns
+                stop = max(first + 1, (column + 1) * len(visible_areas) // columns)
+                chunk = visible_areas[first:stop]
+                for index in sorted({first, first + int(chunk.argmin()), first + int(chunk.argmax()), stop - 1}):
+                    point = QPointF(rect.left() + (index + .5) / self.span * rect.width(),
+                                    rect.bottom() - visible_areas[index] / area_max * rect.height())
+                    if path.elementCount() == 0:
+                        path.moveTo(point)
+                    else:
+                        path.lineTo(point)
+            painter.drawPath(path)
+            if len(visible_areas) == 1:
+                painter.drawEllipse(path.currentPosition(), 2, 2)
+            for fraction in (0, .5, 1):
+                y = rect.bottom() - fraction * rect.height()
+                painter.drawText(QRectF(rect.right() + 5, y - 9, 55, 18),
+                                 Qt.AlignmentFlag.AlignLeft, f"{area_max * fraction:.1f}%")
         painter.setPen(QColor("#b8c0cf"))
         for fraction, alignment in ((0, Qt.AlignmentFlag.AlignLeft), (0.5, Qt.AlignmentFlag.AlignCenter), (1, Qt.AlignmentFlag.AlignRight)):
             x = rect.left() + fraction * rect.width()

@@ -47,7 +47,8 @@ class VideoProjectTests(unittest.TestCase):
                 expected = [analysis.cache.full_mask(i, analysis.info) for i in range(8)]
                 draft = expected[5].copy()
                 draft[0:10, 0:10] = True
-                state = EditorState(5, "処理結果", 1, 1, 12, 1, True)
+                areas = list(analysis.detection_areas())
+                state = EditorState(5, "処理結果", .375, 1, 12, 1, True)
                 path = save_project(analysis, directory / "編集.fyvideo", EffectType.BLUR, 28, state, draft, Event(), progress)
                 before = export_video(analysis, directory / "before.mp4", EffectType.BLUR, 28, Event(), progress)
                 frames, edits = list(analysis.frames), analysis.cache.edit_state()
@@ -59,6 +60,7 @@ class VideoProjectTests(unittest.TestCase):
                 self.assertEqual(loaded.state, state)
                 np.testing.assert_array_equal(loaded.draft, draft)
                 self.assertEqual(restored.frames, frames)
+                np.testing.assert_allclose(restored.detection_areas(), areas)
                 self.assertEqual(restored.cache.edit_state(), edits)
                 self.assertIs(restored.settings.processing.effect, EffectType.BLUR)
                 self.assertEqual(restored.settings.processing.effect_size, 28)

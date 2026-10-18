@@ -33,7 +33,7 @@ class ProjectSourceUnavailable(ValueError):
 class EditorState:
     frame: int = 0
     view: str = "検出範囲"
-    timeline_seconds: int = 0
+    timeline_seconds: float = 0
     tab: int = 0
     brush: int = 40
     start: int | None = None
@@ -47,7 +47,9 @@ class EditorState:
         if self.start is not None and (type(self.start) is not int or not 0 <= self.start < count):
             raise ValueError("保存された補完の始点が不正です。")
         if (self.view not in {"元画像", "検出範囲", "処理結果"}
-                or self.timeline_seconds not in {0, 1, 10} or type(self.draft_dirty) is not bool):
+                or type(self.timeline_seconds) not in (int, float)
+                or not math.isfinite(self.timeline_seconds) or self.timeline_seconds < 0
+                or type(self.draft_dirty) is not bool):
             raise ValueError("保存された表示設定が不正です。")
 
 
@@ -183,6 +185,7 @@ def load_project(path: Path, cancel: Event, progress, *, source_path: Path | Non
             info.verify_source()
             check_cancel(cancel)
             analysis = VideoAnalysis(info, settings, cache, frames, metadata["elapsed"], metadata["encoder_calls"], True)
+            analysis.detection_areas(cancel)
             result = LoadedProject(path, analysis, state, draft)
             cache = None
             return result

@@ -151,6 +151,20 @@ class VideoAnalysis:
     elapsed: float = 0
     encoder_calls: int = 0
     complete: bool = False
+    mask_areas: list[float] = field(default_factory=list)
+
+    def detection_areas(self, cancel: Event | None = None):
+        """Percent of frame covered by original masks, independent of edits."""
+        if len(self.mask_areas) != len(self.frames):
+            areas = []
+            with closing(sqlite3.connect(self.cache.path)) as connection:
+                for (data,) in connection.execute("SELECT mask FROM frames ORDER BY frame"):
+                    if cancel is not None:
+                        check_cancel(cancel)
+                    mask = self.cache.decode_mask(data, (self.info.height, self.info.width))
+                    areas.append(100.0 * np.count_nonzero(mask) / mask.size)
+            self.mask_areas = areas
+        return self.mask_areas
 
     @property
     def duration(self):
@@ -255,6 +269,7 @@ def analyze_video(info: VideoInfo, settings: VideoAnalysisSettings, model_dir: P
                 mask, detections, summary = engine.analyze(image, cancel)
                 FrameCache.append(connection, index, image, mask, detections)
                 result.frames.append(summary)
+                result.mask_areas.append(100.0 * np.count_nonzero(mask) / mask.size)
                 if index % 30 == 0:
                     connection.commit()
                 progress(index + 1, info.estimated_frames, time.perf_counter() - started)

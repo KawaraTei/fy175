@@ -166,11 +166,22 @@ class VideoMosaicWindow(QMainWindow):
 
         timeline_header = QHBoxLayout()
         timeline_header.addWidget(QLabel("検出マスク数"))
-        legend = QLabel("青: マスク数　橙: 0件・短い減少")
+        self.count_visible = QCheckBox("数")
+        self.area_visible = QCheckBox("面積")
+        for control, color in ((self.count_visible, "#8bd1ff"), (self.area_visible, "#ee91d7")):
+            control.setChecked(True)
+            control.setStyleSheet(f"color: {color};")
+            control.toggled.connect(lambda: self.timeline.set_series_visible(
+                self.count_visible.isChecked(), self.area_visible.isChecked()))
+            timeline_header.addWidget(control)
+        self.area_visible.setToolTip("画面全体に占める検出マスクの面積（重なりは一度だけ集計）")
+        legend = QLabel("橙: 0件・短い減少")
         legend.setObjectName("muted")
         timeline_header.addWidget(legend, 1)
         timeline_header.addWidget(QLabel("表示範囲"))
         self.zoom = QComboBox()
+        self.zoom.setMinimumContentsLength(8)
+        self.zoom.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         for label, value in (("全体", 0), ("10秒", 10), ("1秒", 1)):
             self.zoom.addItem(label, value)
         self.zoom.currentIndexChanged.connect(lambda: self.timeline.set_window_seconds(self.zoom.currentData()))
@@ -179,6 +190,7 @@ class VideoMosaicWindow(QMainWindow):
         self.timeline = MaskCountTimeline()
         self.timeline.setFixedHeight(128)
         self.timeline.frame_requested.connect(self._user_seek)
+        self.timeline.window_changed.connect(self._sync_timeline_zoom)
         review.addWidget(self.timeline)
         changes_header = QHBoxLayout()
         self.change_label = QLabel("変化点 0件")
@@ -458,6 +470,17 @@ class VideoMosaicWindow(QMainWindow):
         if path:
             self.save_project_to(Path(path))
 
+    def _sync_timeline_zoom(self, seconds):
+        self.zoom.blockSignals(True)
+        if self.zoom.count() > 3:
+            self.zoom.removeItem(3)
+        index = self.zoom.findData(seconds)
+        if index < 0:
+            self.zoom.addItem(f"{seconds:.3g}秒", seconds)
+            index = self.zoom.count() - 1
+        self.zoom.setCurrentIndex(index)
+        self.zoom.blockSignals(False)
+
     def save_project_to(self, path: Path):
         if self.analysis is None or self.busy:
             return
@@ -473,6 +496,7 @@ class VideoMosaicWindow(QMainWindow):
 
     def _restore_project(self, project):
         self._set_analysis(project.analysis)
+        self._sync_timeline_zoom(project.state.timeline_seconds)
         processing = self.analysis.settings.processing
         self.analysis_config_values = (self.mode.findData(processing.mode.value), "penis" in processing.targets,
             "vagina" in processing.targets, round(processing.confidence_threshold * 100),
@@ -667,7 +691,7 @@ class VideoMosaicWindow(QMainWindow):
         self.mask_editor.edits, self.mask_editor.can_undo = analysis.cache.edit_state()
         self.project_dirty = bool(self.mask_editor.edits)
         self._update_project_title()
-        self.timeline.set_frames(analysis.frames, float(analysis.info.fps))
+        self.timeline.set_frames(analysis.frames, float(analysis.info.fps), analysis.detection_areas())
         self.timeline.set_edits(self.mask_editor.edits)
         self.timeline.set_window_seconds(self.zoom.currentData())
         changes = analysis.changes

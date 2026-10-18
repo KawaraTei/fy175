@@ -60,6 +60,7 @@ from auto_mosaic.model_catalog import required_model_paths
 from auto_mosaic.pipeline import MosaicPipeline
 from auto_mosaic.sidecar import save_sidecar, sidecar_path
 from auto_mosaic.ui_style import APP_STYLE, section_label
+from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
 
 
 APP_NAME = "FY175AutoMosaic"
@@ -436,35 +437,39 @@ class AutoMosaicWindow(QMainWindow):
         right_layout.setContentsMargins(14, 12, 14, 12)
         right_layout.setSpacing(7)
 
-        right_layout.addWidget(self._section_label("画像の種類"))
+        self.advanced_settings = AdvancedSettingsDialog(self, "画像")
+        advanced = self.advanced_settings.settings_layout
+        self.advanced_button = self._button("詳細設定…", self.advanced_settings.show_settings)
+        right_layout.addWidget(self.advanced_button)
+        advanced.addWidget(self._section_label("画像の種類"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["実写", "イラスト"])
         self.mode_combo.setCurrentText("イラスト")
-        right_layout.addWidget(self.mode_combo)
-        right_layout.addSpacing(8)
+        advanced.addWidget(self.mode_combo)
+        advanced.addSpacing(8)
 
-        right_layout.addWidget(self._section_label("検出対象"))
+        advanced.addWidget(self._section_label("検出対象"))
         self.penis_check = QCheckBox("penis")
         self.penis_check.setChecked(True)
         self.vagina_check = QCheckBox("vagina / pussy")
         self.vagina_check.setChecked(True)
-        right_layout.addWidget(self.penis_check)
-        right_layout.addWidget(self.vagina_check)
-        right_layout.addSpacing(8)
+        advanced.addWidget(self.penis_check)
+        advanced.addWidget(self.vagina_check)
+        advanced.addSpacing(8)
 
-        right_layout.addWidget(self._section_label("検出閾値"))
+        advanced.addWidget(self._section_label("検出閾値"))
         self.threshold_value = QLabel("0.25")
         self.threshold_value.setObjectName("value")
         self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignRight)
-        right_layout.addWidget(self.threshold_value)
+        advanced.addWidget(self.threshold_value)
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
         self.threshold_slider.setRange(*(round(v * 100) for v in PROCESSING_RANGES["confidence_threshold"][:2]))
         self.threshold_slider.setValue(25)
         self.threshold_slider.valueChanged.connect(
             lambda value: self.threshold_value.setText(f"{value / 100:.2f}")
         )
-        right_layout.addWidget(self.threshold_slider)
-        right_layout.addSpacing(8)
+        advanced.addWidget(self.threshold_slider)
+        advanced.addSpacing(8)
 
         mask_threshold_row = QHBoxLayout()
         mask_threshold_label = self._section_label("マスク閾値")
@@ -485,7 +490,7 @@ class AutoMosaicWindow(QMainWindow):
         )
         mask_threshold_label.setBuddy(self.mask_threshold_spin)
         mask_threshold_row.addWidget(self.mask_threshold_spin)
-        right_layout.addLayout(mask_threshold_row)
+        advanced.addLayout(mask_threshold_row)
 
         mask_expansion_row = QHBoxLayout()
         mask_expansion_label = QLabel("マスク拡張")
@@ -508,7 +513,12 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_hint = QLabel("閾値：低いほど広く、高いほど狭く\n変更後は「この画像を再解析」")
         self.mask_hint.setObjectName("muted")
         self.mask_hint.setWordWrap(True)
-        right_layout.addWidget(self.mask_hint)
+        advanced.addWidget(self.mask_hint)
+        self.mask_smoothing_spin = add_mask_smoothing(right_layout)
+        smoothing_hint = QLabel("滑らかさ・拡張の変更後は再解析")
+        smoothing_hint.setObjectName("muted")
+        smoothing_hint.setWordWrap(True)
+        right_layout.addWidget(smoothing_hint)
         right_layout.addWidget(self.analyze_button)
         right_layout.addWidget(self.mask_edit_button)
         brush_row = QHBoxLayout()
@@ -555,10 +565,11 @@ class AutoMosaicWindow(QMainWindow):
         )
         right_layout.addWidget(self.open_output_button)
 
-        right_layout.addWidget(self._section_label("出力suffix"))
+        advanced.addWidget(self._section_label("出力suffix"))
         self.suffix_edit = QLineEdit("_mosaic")
         self.suffix_edit.setPlaceholderText("空欄可")
-        right_layout.addWidget(self.suffix_edit)
+        advanced.addWidget(self.suffix_edit)
+        advanced.addStretch(1)
         right_layout.addStretch(1)
 
         settings_scroll = QScrollArea()
@@ -909,6 +920,7 @@ class AutoMosaicWindow(QMainWindow):
             + ("次の領域選択に反映" if self.mask_edit_active else "変更後は「この画像を再解析」")
         )
         self.mask_expansion_spin.setEnabled(not self.mask_edit_active and not self.busy)
+        self.mask_smoothing_spin.setEnabled(not self.mask_edit_active and not self.busy)
         self.analyze_button.setEnabled(not self.mask_edit_active and not self.busy)
         self.process_current_button.setEnabled(not self.busy)
         self.copy_current_button.setEnabled(not self.busy)
@@ -1046,6 +1058,7 @@ class AutoMosaicWindow(QMainWindow):
             effect_size=self.effect_size_slider.value(),
             mask_threshold=self.mask_threshold_spin.value(),
             mask_expansion=self.mask_expansion_spin.value(),
+            mask_smoothing=self.mask_smoothing_spin.value(),
         )
 
     def _analyze_current(self) -> None:
@@ -1108,6 +1121,7 @@ class AutoMosaicWindow(QMainWindow):
             (self.threshold_slider, "setValue", round(settings.confidence_threshold * 100)),
             (self.mask_threshold_spin, "setValue", settings.mask_threshold),
             (self.mask_expansion_spin, "setValue", settings.mask_expansion),
+            (self.mask_smoothing_spin, "setValue", settings.mask_smoothing),
             (self.effect_combo, "setCurrentText", "モザイク" if settings.effect == EffectType.MOSAIC else "ぼかし"),
             (self.effect_size_slider, "setValue", settings.effect_size),
         )

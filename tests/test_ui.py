@@ -34,6 +34,7 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
     app = QApplication.instance() or QApplication([])
     window = AutoMosaicWindow()
     window.show()
+    window.advanced_button.click()
     app.processEvents()
     received = []
 
@@ -68,20 +69,24 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
             assert window.mask_threshold_spin.value() == 0.5
             window.mask_threshold_spin.setValue(1.5)
             window.mask_expansion_spin.setValue(0)
+            window.mask_smoothing_spin.setValue(8)
             assert window.current_result is original_result
             assert len(received) == 1
             QTest.mouseClick(window.analyze_button, Qt.MouseButton.LeftButton)
             assert not window.mask_threshold_spin.isEnabled()
             assert not window.mask_expansion_spin.isEnabled()
+            assert not window.mask_smoothing_spin.isEnabled()
             wait_for_result()
             assert received[-1].mask_threshold == 1.5
             assert received[-1].mask_expansion == 0
+            assert received[-1].mask_smoothing == 8
             assert received[-1].confidence_threshold == 0.25
             window.set_preview_mode("検出範囲")
             QTest.mouseClick(window.mask_edit_button, Qt.MouseButton.LeftButton)
             assert window.mask_edit_active
             assert window.mask_threshold_spin.isEnabled()
             assert not window.mask_expansion_spin.isEnabled()
+            assert not window.mask_smoothing_spin.isEnabled()
             window._end_mask_edit(refresh_preview=True)
             assert window.mask_threshold_spin.isEnabled()
             assert window.mask_expansion_spin.isEnabled()
@@ -95,6 +100,7 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
             assert len(received) == 4
             assert all(settings.mask_threshold == 1.5 for settings in received[1:])
             assert all(settings.mask_expansion == 0 for settings in received[1:])
+            assert all(settings.mask_smoothing == 8 for settings in received[1:])
     finally:
         window._end_mask_edit(refresh_preview=False)
         window.close()

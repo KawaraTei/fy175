@@ -120,12 +120,28 @@ def paint_mask_stroke(
     return not np.array_equal(region, before)
 
 
-def refine_mask(mask: np.ndarray, expansion: int) -> np.ndarray:
+def refine_mask(mask: np.ndarray, expansion: int, smoothing: int = 0) -> np.ndarray:
     binary = mask.astype(np.uint8) * 255
     closing_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (MASK_CONTOUR_CLOSE_SIZE, MASK_CONTOUR_CLOSE_SIZE)
     )
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, closing_kernel)
+    if smoothing > 0:
+        # Round small contour irregularities in source-image pixels, before
+        # expansion. Keep a binary mask: smoothing must not weaken the effect.
+        radius = int(smoothing)
+        softened = cv2.GaussianBlur(
+            binary, (radius * 2 + 1, radius * 2 + 1), 0,
+            borderType=cv2.BORDER_REPLICATE,
+        )
+        rounded = (softened >= 128).astype(np.uint8) * 255
+        # A small detected region must not disappear at a large radius.
+        count, labels = cv2.connectedComponents(binary, connectivity=8)
+        retained = np.unique(labels[rounded > 0])
+        missing = np.setdiff1d(np.arange(1, count), retained)
+        if missing.size:
+            rounded[np.isin(labels, missing)] = 255
+        binary = rounded
     if expansion > 0:
         size = expansion * 2 + 1
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))

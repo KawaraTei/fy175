@@ -29,7 +29,7 @@ class SidecarTests(unittest.TestCase):
         Image.fromarray(np.random.default_rng(42).integers(0, 255, (64, 96, 3), dtype=np.uint8)).save(self.source)
         self.settings = ProcessingSettings(ImageMode.ILLUSTRATION, frozenset({"penis"}), .4,
                                            effect=EffectType.BLUR, effect_size=12, mask_threshold=1.5,
-                                           mask_expansion=5)
+                                           mask_expansion=5, mask_smoothing=8)
         self.mask = np.zeros((64, 96), bool)
         self.mask[10:40, 15:65] = True
         self.mask[20:30, 30:40] = False

@@ -24,6 +24,7 @@ PROCESSING_RANGES = {
     "confidence_threshold": (0.05, 0.95, 0.01),
     "effect_size": (4, 64, 1),
     "mask_expansion": (0, 20, 1),
+    "mask_smoothing": (0, 20, 1),
     "mask_threshold": (-10.0, 10.0, 0.1),
 }
 
@@ -45,6 +46,7 @@ class ProcessingSettings:
     effect_size: int = 16
     mask_expansion: int = 3
     mask_threshold: float = 0.0
+    mask_smoothing: int = 0
 
 
 @dataclass

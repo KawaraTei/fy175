@@ -311,6 +311,7 @@ class AgentController:
         if workspace == "image":
             fields.update(mask_threshold=(w.mask_threshold_spin, "number", None),
                           mask_expansion=(w.mask_expansion_spin, "integer", None),
+                          mask_smoothing=(w.mask_smoothing_spin, "integer", None),
                           output_dir=(w.output_edit, "string", None), suffix=(w.suffix_edit, "string", None),
                           remove_after_process=(w.remove_after_process_check, "boolean", None),
                           save_mask_settings=(w.save_sidecar_check, "boolean", None))

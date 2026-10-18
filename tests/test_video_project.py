@@ -40,6 +40,8 @@ class VideoProjectTests(unittest.TestCase):
             analysis = make_edit_analysis(directory)
             loaded = None
             try:
+                analysis.settings = replace(analysis.settings, processing=replace(
+                    analysis.settings.processing, mask_smoothing=8))
                 save_frame_mask(analysis, 1, manual_mask(analysis, 1), Event(), progress)
                 propagate_mask(analysis, 1, 5, Event(), progress)
                 expected = [analysis.cache.full_mask(i, analysis.info) for i in range(8)]
@@ -60,6 +62,7 @@ class VideoProjectTests(unittest.TestCase):
                 self.assertEqual(restored.cache.edit_state(), edits)
                 self.assertIs(restored.settings.processing.effect, EffectType.BLUR)
                 self.assertEqual(restored.settings.processing.effect_size, 28)
+                self.assertEqual(restored.settings.processing.mask_smoothing, 8)
                 for i, mask in enumerate(expected):
                     np.testing.assert_array_equal(restored.cache.full_mask(i, restored.info), mask)
                 after = export_video(restored, directory / "after.mp4", EffectType.BLUR, 28, Event(), progress)

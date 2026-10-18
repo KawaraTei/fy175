@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from auto_mosaic.domain import EffectType, ImageMode, ProcessingSettings
 from auto_mosaic.image_ops import apply_effect, visualize_detection
 from auto_mosaic.ui_style import APP_STYLE, section_label
+from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
 from auto_mosaic.video_analysis import VideoAnalysis, VideoAnalysisSettings, analyze_video, export_video
 from auto_mosaic.video_io import VIDEO_EXTENSIONS, VideoCancelled, decode_frames, probe_video
 from auto_mosaic.video_mask_editor import VideoMaskEditor
@@ -212,30 +213,40 @@ class VideoMosaicWindow(QMainWindow):
         settings = QVBoxLayout(panel)
         settings.setContentsMargins(14, 12, 14, 12)
         settings.setSpacing(7)
-        settings.addWidget(section_label("画像の種類"))
+        self.advanced_settings = AdvancedSettingsDialog(self, "動画")
+        advanced = self.advanced_settings.settings_layout
+        self.advanced_button = QPushButton("詳細設定…")
+        self.advanced_button.clicked.connect(self.advanced_settings.show_settings)
+        settings.addWidget(self.advanced_button)
+        advanced.addWidget(section_label("画像の種類"))
         self.mode = QComboBox()
         self.mode.addItem("実写", ImageMode.PHOTO.value)
         self.mode.addItem("イラスト", ImageMode.ILLUSTRATION.value)
         self.mode.setCurrentIndex(1)
-        settings.addWidget(self.mode)
-        settings.addSpacing(8)
-        settings.addWidget(section_label("検出対象"))
+        advanced.addWidget(self.mode)
+        advanced.addSpacing(8)
+        advanced.addWidget(section_label("検出対象"))
         self.penis_check = QCheckBox("penis")
         self.vagina_check = QCheckBox("vagina / pussy")
         for check in (self.penis_check, self.vagina_check):
             check.setChecked(True)
-            settings.addWidget(check)
-        settings.addSpacing(8)
-        settings.addWidget(section_label("検出閾値"))
+            advanced.addWidget(check)
+        advanced.addSpacing(8)
+        advanced.addWidget(section_label("検出閾値"))
         self.threshold_value = QLabel("0.25")
         self.threshold_value.setObjectName("value")
         self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignRight)
-        settings.addWidget(self.threshold_value)
+        advanced.addWidget(self.threshold_value)
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
         self.threshold_slider.setRange(5, 95)
         self.threshold_slider.setValue(25)
         self.threshold_slider.valueChanged.connect(lambda value: self.threshold_value.setText(f"{value / 100:.2f}"))
-        settings.addWidget(self.threshold_slider)
+        advanced.addWidget(self.threshold_slider)
+        advanced.addSpacing(8)
+        self.mask_smoothing_spin = add_mask_smoothing(settings)
+        smoothing_hint = QLabel("変更後は動画を再解析")
+        smoothing_hint.setObjectName("muted")
+        settings.addWidget(smoothing_hint)
         settings.addSpacing(8)
 
         settings.addWidget(section_label("処理方法"))
@@ -261,16 +272,19 @@ class VideoMosaicWindow(QMainWindow):
         settings.addWidget(self.effect_size)
         settings.addSpacing(8)
 
-        settings.addWidget(section_label("輪郭更新"))
+        advanced.addWidget(section_label("輪郭更新"))
         self.interval = QComboBox()
         for label, value in (("毎フレーム（精度優先）", 1), ("3フレームごと（高速）", 3), ("5フレームごと（高速）", 5)):
             self.interval.addItem(label, value)
-        settings.addWidget(self.interval)
+        advanced.addWidget(self.interval)
         self.interval_note = QLabel("検出は全フレームで実行します。")
         self.interval_note.setWordWrap(True)
         self.interval_note.setObjectName("muted")
-        settings.addWidget(self.interval_note)
-        self.analysis_controls = [self.mode, self.penis_check, self.vagina_check, self.threshold_slider, self.interval]
+        advanced.addWidget(self.interval_note)
+        advanced.addStretch(1)
+        self.analysis_controls = [self.mode, self.penis_check, self.vagina_check, self.threshold_slider,
+                                  self.interval, self.mask_smoothing_spin]
+        self.mask_smoothing_spin.valueChanged.connect(self._analysis_settings_changed)
         self.mode.currentIndexChanged.connect(self._analysis_settings_changed)
         self.interval.currentIndexChanged.connect(self._analysis_settings_changed)
         self.threshold_slider.valueChanged.connect(self._analysis_settings_changed)
@@ -352,18 +366,19 @@ class VideoMosaicWindow(QMainWindow):
             targets.add("vagina")
         # Qt stores str-enums as plain strings: reconstruct them at the UI boundary.
         return VideoAnalysisSettings(ProcessingSettings(ImageMode(self.mode.currentData()), frozenset(targets),
-                                                        self.threshold_slider.value() / 100), self.interval.currentData())
+                                                        self.threshold_slider.value() / 100,
+                                                        mask_smoothing=self.mask_smoothing_spin.value()), self.interval.currentData())
 
     def _effect_type(self) -> EffectType:
         return EffectType(self.effect.currentData())
 
     def _config_values(self):
         return (self.mode.currentIndex(), self.penis_check.isChecked(), self.vagina_check.isChecked(),
-                self.threshold_slider.value(), self.interval.currentIndex())
+                self.threshold_slider.value(), self.interval.currentIndex(), self.mask_smoothing_spin.value())
 
     def _restore_config_values(self):
         setters = (self.mode.setCurrentIndex, self.penis_check.setChecked, self.vagina_check.setChecked,
-                   self.threshold_slider.setValue, self.interval.setCurrentIndex)
+                   self.threshold_slider.setValue, self.interval.setCurrentIndex, self.mask_smoothing_spin.setValue)
         for control, setter, value in zip(self.analysis_controls, setters, self.analysis_config_values):
             control.blockSignals(True)
             setter(value)
@@ -461,7 +476,7 @@ class VideoMosaicWindow(QMainWindow):
         processing = self.analysis.settings.processing
         self.analysis_config_values = (self.mode.findData(processing.mode.value), "penis" in processing.targets,
             "vagina" in processing.targets, round(processing.confidence_threshold * 100),
-            self.interval.findData(self.analysis.settings.contour_interval))
+            self.interval.findData(self.analysis.settings.contour_interval), processing.mask_smoothing)
         self._restore_config_values()
         for control, value in ((self.effect, self.effect.findData(processing.effect.value)),
                                (self.view_mode, self.view_mode.findText(project.state.view)),

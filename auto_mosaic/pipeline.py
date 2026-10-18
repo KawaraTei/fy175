@@ -81,7 +81,7 @@ class MosaicPipeline:
                         segmenter.mask_candidates_from_box(
                             embedding, detection.box, settings.mask_threshold
                         ),
-                        image.shape[:2], detection.box, settings.mask_expansion,
+                        image.shape[:2], detection.box, settings.mask_expansion, settings.mask_smoothing,
                     )
                     fallback_count += int(fallback)
                     combined_mask |= candidate

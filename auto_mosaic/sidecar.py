@@ -68,7 +68,8 @@ def _read_settings(data) -> ProcessingSettings:
             raise ValueError("保存された設定値が範囲外です。")
         if abs(value / step - round(value / step)) > 1e-6:
             raise ValueError("保存された設定値の刻みが不正です。")
-    if type(settings.effect_size) is not int or type(settings.mask_expansion) is not int:
+    if any(type(getattr(settings, name)) is not int
+           for name in ("effect_size", "mask_expansion", "mask_smoothing")):
         raise ValueError("サイズは整数で指定してください。")
     return settings
 

@@ -16,7 +16,7 @@ from tests.test_mask_smoothing import Detector, Segmenter
 
 def main():
     app = QApplication.instance() or QApplication([])
-    destination = Path(".codex-qa/2026-10-18/mask-settings").resolve()
+    destination = Path(".codex-qa/2026-10-19/mask-settings").resolve()
     destination.mkdir(parents=True, exist_ok=True)
     source = destination / "contour-fixture.png"
     yy, xx = np.indices((240, 320))

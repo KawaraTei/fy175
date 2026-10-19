@@ -171,7 +171,7 @@ class VideoMaskUiTests(unittest.TestCase):
                 window.seek(1)
                 original_settings = window._config_values()
                 for control in (window.preview, window.timeline, window.seek_slider,
-                                window.threshold_slider, window.mode, editor.start_button, window.change_table):
+                                window.effect_size, window.effect, editor.start_button, window.change_table):
                     control.setFocus()
                     QTest.keyClick(control, Qt.Key.Key_Right)
                     self.assertEqual(window.current_frame, 2, type(control).__name__)

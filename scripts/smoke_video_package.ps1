@@ -1,6 +1,11 @@
+param([string]$PackageDirectory = 'dist\FY175AutoMosaic')
+
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Executable = Join-Path $ProjectRoot 'dist\FY175AutoMosaic\FY175AutoMosaic.exe'
+if (-not [System.IO.Path]::IsPathRooted($PackageDirectory)) {
+    $PackageDirectory = Join-Path $ProjectRoot $PackageDirectory
+}
+$Executable = Join-Path $PackageDirectory 'FY175AutoMosaic.exe'
 
 # MainWindowHandle excludes hidden windows. Enumerate only this test process's
 # windows so the smoke check can keep the desktop undisturbed.
@@ -57,7 +62,7 @@ finally {
     $VideoProcess.Dispose()
 }
 
-$PackagedProbe = Join-Path $ProjectRoot 'dist\FY175AutoMosaic\_internal\ffmpeg\ffprobe.exe'
+$PackagedProbe = Join-Path $PackageDirectory '_internal\ffmpeg\ffprobe.exe'
 & $PackagedProbe -v error -show_entries format=duration -of json (Join-Path $ProjectRoot '.codex-qa\2026-09-20\timeline-fixture.mp4')
 if ($LASTEXITCODE -ne 0) { throw 'Packaged ffprobe failed.' }
 Write-Output 'PACKAGED_VIDEO_TOOLS_OK'

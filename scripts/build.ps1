@@ -54,6 +54,7 @@ Copy-Item -LiteralPath 'AGENT_INTERFACE.md' -Destination 'dist\FY175AutoMosaic\A
 Copy-Item -LiteralPath 'LICENSE' -Destination 'dist\FY175AutoMosaic\LICENSE' -Force
 Copy-Item -LiteralPath 'NOTICE' -Destination 'dist\FY175AutoMosaic\NOTICE' -Force
 Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination 'dist\FY175AutoMosaic\THIRD_PARTY_NOTICES.md' -Force
+Copy-Item -LiteralPath 'THIRD_PARTY_SOURCES.md' -Destination 'dist\FY175AutoMosaic\THIRD_PARTY_SOURCES.md' -Force
 Copy-Item -LiteralPath 'MODEL_LICENSES.md' -Destination 'dist\FY175AutoMosaic\MODEL_LICENSES.md' -Force
 Copy-Item -LiteralPath 'DISTRIBUTION.md' -Destination 'dist\FY175AutoMosaic\DISTRIBUTION.md' -Force
 Copy-Item -LiteralPath 'LICENSES' -Destination 'dist\FY175AutoMosaic\LICENSES' -Recurse -Force

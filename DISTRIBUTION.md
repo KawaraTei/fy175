@@ -3,6 +3,15 @@
 This checklist covers repository publication and optional Windows binary
 releases. It is operational guidance, not legal advice.
 
+## Release 1.1.0
+
+The public Windows ZIP is the CPU build; NVIDIA CUDA/cuDNN libraries are not
+redistributed. GPU source builds remain available. `THIRD_PARTY_SOURCES.md`
+records the exact FFmpeg source/build revisions and the companion source asset,
+including the Qt/PySide sources and third-party notices. The existing 1.1.0 tag
+identifies the unchanged application code; later release-documentation and
+verification-script commits are listed separately in the release notes.
+
 ## Before publishing the repository
 
 - [ ] Confirm that `Hiyoko Typing` is the correct copyright holder name in

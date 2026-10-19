@@ -45,6 +45,14 @@ AGPL license. Review their distribution terms and compatibility with the
 application license before publishing a GPU binary; the local build is not a
 completed redistribution review.
 
+The public 1.1.0 Windows ZIP uses the CPU edition of ONNX Runtime. It does not
+include NVIDIA CUDA or cuDNN runtime DLLs. GPU setup remains available for local
+source builds; the application license is unchanged.
+
+Exact source locations and release source archives are documented in
+`THIRD_PARTY_SOURCES.md`. The release preserves the FFmpeg build recipe revision
+and source revision, as well as the Qt/PySide source versions and notices.
+
 ## Models and model tooling
 
 | File / component | Source | Declared or applicable terms | Included text |

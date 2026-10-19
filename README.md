@@ -30,6 +30,9 @@ https://github.com/user-attachments/assets/381532db-beb5-4870-8bde-77b360c8f93e
 1. 配布されたZIPを展開します。
 2. `FY175AutoMosaic`フォルダ内の`FY175AutoMosaic.exe`を起動します。
 
+1.1.0の配布ZIPはCPU版です。動画モードはβ版として利用できます。
+GPUで処理する場合は、下記のソース版セットアップを使用してください。
+
 `FY175AutoMosaic.exe`だけを別の場所へ移動しないでください。モデルや動作に必要な
 ファイルを含むため、展開した`FY175AutoMosaic`フォルダ全体をそのまま使用します。
 
@@ -311,7 +314,7 @@ Ctrl+Zでは、1ドラッグまたは1回の領域選択が1操作です。履�
   プレビューと出力を一致させるため、可変fps入力は解析・出力とも元動画の平均fpsで固定fps化します。
   縦動画の回転情報を反映し、奇数寸法は右端／下端に最大1pxを足します。
 - HDR、非正方形ピクセル、240fps超の入力は未対応です。字幕と2本目以降の音声は出力しません。
-- 推論は既存のCPU版ONNX Runtimeを使用します。GPU用依存ライブラリは追加していません。
+- 配布ZIPの推論はCPU版ONNX Runtimeを使用します。ソース版は上記の手順でGPUにも対応します。
   動画入力と音声処理は [FFmpeg](https://ffmpeg.org/ffmpeg.html) を使用します。
 
 ソース実行は `auto_mosaic/video_io.py` の `SHARED_FFMPEG_DIR` にある共有FFmpegを使います。

@@ -276,8 +276,11 @@ class LayerMosaicWindow(QMainWindow):
     def _invalidate_detection(self, *_):
         if self.document is None:
             return
+        preview_pending = self.render_timer.isActive()
         self.render_timer.stop()
         self.mask = self.analysis = self.result = None
+        if preview_pending:
+            self.render_timer.start(150)
         self.status.setText("検出設定を変更しました。再解析してください。")
         self.refresh_preview()
         self._controls()

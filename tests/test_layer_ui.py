@@ -70,10 +70,11 @@ class LayerUiTests(unittest.TestCase):
                 self.assertFalse(window.flatten_button.isEnabled())
                 wait_idle(self.app, window)
                 self.assertEqual(window.pipeline.analyze_image.call_count, 1)
+                # A detection edit must not cancel an accepted, pending visibility update.
+                foreground.setCheckState(3, Qt.CheckState.Unchecked)
                 window.layers.topLevelItem(0).setCheckState(2, Qt.CheckState.Unchecked)
                 self.assertIsNone(window.result)
                 self.assertFalse(window.flatten_button.isEnabled())
-                foreground.setCheckState(3, Qt.CheckState.Unchecked)
                 wait_idle(self.app, window)
                 np.testing.assert_array_equal(window.original, background)
                 self.assertIsNone(window.result)

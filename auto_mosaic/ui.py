@@ -61,6 +61,9 @@ from auto_mosaic.pipeline import MosaicPipeline
 from auto_mosaic.sidecar import save_sidecar, sidecar_path
 from auto_mosaic.ui_style import APP_STYLE, section_label
 from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
+from auto_mosaic.platform_support import (
+    application_root, resource_root, default_output_dir, command_key, option_key, file_manager_name,
+)
 
 
 APP_NAME = "FY175AutoMosaic"
@@ -215,18 +218,6 @@ class MaskPreviewLabel(QLabel):
         painter.end()
 
 
-def application_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
-
-
-def resource_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS")).resolve()
-    return Path(__file__).resolve().parents[1]
-
-
 class AutoMosaicWindow(QMainWindow):
     def _notice(self, kind, title, text):
         """Agent sessions receive notifications as data instead of modal dialogs."""
@@ -267,7 +258,7 @@ class AutoMosaicWindow(QMainWindow):
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.analysis_generation = 0
 
-        self.mask_undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.mask_undo_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self)
         self.mask_undo_shortcut.activated.connect(self._undo_mask_edit)
         self.mask_undo_shortcut.setEnabled(False)
         self._build_layout()
@@ -405,10 +396,10 @@ class AutoMosaicWindow(QMainWindow):
         self.preview_label.stroke_finished.connect(self._finish_mask_stroke)
         self.preview_label.region_requested.connect(self._select_mask_region)
         self.preview_label.setToolTip(
-            "マスク編集中: ドラッグで追加 / Alt+ドラッグで削除\n"
-            "Shift+クリックでAI領域を追加 / Ctrl+Shift+クリックで削除\n"
+            f"マスク編集中: ドラッグで追加 / {option_key()}+ドラッグで削除\n"
+            f"Shift+クリックでAI領域を追加 / {command_key()}+Shift+クリックで削除\n"
             "AI領域選択には現在のマスク閾値を使用します。\n"
-            "Ctrl+Zで直前のマスク編集を元に戻します。"
+            f"{command_key()}+Zで直前のマスク編集を元に戻します。"
         )
         self.preview_label.zoom_requested.connect(self._zoom_preview)
         center_layout.addWidget(self.preview_label, 1)
@@ -567,7 +558,7 @@ class AutoMosaicWindow(QMainWindow):
 
         right_layout.addWidget(self._section_label("出力フォルダ"))
         output_row = QHBoxLayout()
-        self.output_edit = QLineEdit(str(self.app_root / "output"))
+        self.output_edit = QLineEdit(str(default_output_dir()))
         self.output_edit.setReadOnly(True)
         output_row.addWidget(self.output_edit, 1)
         browse = self._button("…", self._choose_output)
@@ -576,7 +567,7 @@ class AutoMosaicWindow(QMainWindow):
         right_layout.addLayout(output_row)
 
         self.open_output_button = self._button(
-            "エクスプローラで表示", self._open_output_folder
+            f"{file_manager_name()}で表示", self._open_output_folder
         )
         right_layout.addWidget(self.open_output_button)
 
@@ -873,7 +864,7 @@ class AutoMosaicWindow(QMainWindow):
         self._update_mask_edit_controls()
         self._refresh_preview()
         self.status_label.setText(
-            "マスク編集中: Shift+クリックで領域追加 / Ctrl+Shift+クリックで領域削除"
+            f"マスク編集中: Shift+クリックで領域追加 / {command_key()}+Shift+クリックで領域削除"
         )
 
     def _confirm_discard_mask_edit(
@@ -1366,7 +1357,7 @@ class AutoMosaicWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "出力フォルダ",
-                "エクスプローラでフォルダを開けませんでした。",
+                f"{file_manager_name()}でフォルダを開けませんでした。",
             )
 
     def _show_original(self, path: Path) -> None:
@@ -1743,6 +1734,7 @@ def run() -> None:
 
     parser = argparse.ArgumentParser(description="FY175AutoMosaic: local image processing")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--platform-smoke", action="store_true", help="Check native layers and video tools.")
     parser.add_argument("--video", action="store_true", help="Open video mode.")
     parser.add_argument("--agent-api", type=int, nargs="?", const=8765, metavar="PORT",
                         help="Start built-in local HTTP agent API (default 8765). GET / for all operations.")
@@ -1755,7 +1747,7 @@ def run() -> None:
         window = VideoMosaicWindow()
     else:
         window = AutoMosaicWindow()
-    smoke_test = options.smoke_test
+    smoke_test = options.smoke_test or options.platform_smoke
     if options.agent_api is not None:
         from auto_mosaic.agent_api import AgentServer
 
@@ -1771,8 +1763,11 @@ def run() -> None:
         missing = [path for path in required_model_paths(window.model_dir) if not path.exists()]
         if missing:
             raise FileNotFoundError(f"Packaged models are missing: {missing}")
-        from auto_mosaic.smoke import run_model_smoke
-
-        run_model_smoke(window.model_dir)
+        if options.smoke_test:
+            from auto_mosaic.smoke import run_model_smoke
+            run_model_smoke(window.model_dir)
+        if options.platform_smoke:
+            from auto_mosaic.platform_smoke import run_platform_smoke
+            run_platform_smoke()
         QTimer.singleShot(250, app.quit)
     raise SystemExit(app.exec())

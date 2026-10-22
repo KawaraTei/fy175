@@ -23,7 +23,8 @@ def main():
     root = Path(".codex-qa/layers").resolve()
     root.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication([])
-    QFontDatabase.addApplicationFont("C:/Windows/Fonts/meiryo.ttc")
+    if Path("C:/Windows/Fonts/meiryo.ttc").is_file():
+        QFontDatabase.addApplicationFont("C:/Windows/Fonts/meiryo.ttc")
     report = {}
     for extension in (".psd", ".clip"):
         source = root / ("layer-sample" + extension)

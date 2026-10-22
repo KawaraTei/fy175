@@ -20,6 +20,7 @@ from auto_mosaic.domain import EffectType, ImageMode, ProcessingSettings, TARGET
 from auto_mosaic.image_ops import apply_effect, visualize_detection
 from auto_mosaic.ui_style import APP_STYLE, section_label
 from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
+from auto_mosaic.platform_support import default_output_dir, resource_root, command_key
 from auto_mosaic.video_analysis import VideoAnalysis, VideoAnalysisSettings, analyze_video, export_video
 from auto_mosaic.video_io import VIDEO_EXTENSIONS, VideoCancelled, decode_frames, probe_video
 from auto_mosaic.video_mask_editor import VideoMaskEditor
@@ -33,9 +34,8 @@ from auto_mosaic.video_timeline import ChangeTableModel, MaskCountTimeline, time
 class VideoMosaicWindow(QMainWindow):
     def __init__(self, model_dir: Path | None = None, output_dir: Path | None = None):
         super().__init__()
-        from auto_mosaic.ui import application_root, resource_root
         self.model_dir = model_dir or resource_root() / "models"
-        self.output_dir = output_dir or application_root() / "output"
+        self.output_dir = output_dir or default_output_dir()
         self.info = None
         self.analysis: VideoAnalysis | None = None
         self.current_frame = 0
@@ -119,9 +119,9 @@ class VideoMosaicWindow(QMainWindow):
         self.project_open_button.clicked.connect(self._choose_project)
         header.addWidget(self.project_open_button)
         self.project_save_button = QPushButton("編集を保存…")
-        self.project_save_button.setToolTip("解析結果・マスク・設定・現在位置を .fyvideo に保存（Ctrl+S）")
+        self.project_save_button.setToolTip(f"解析結果・マスク・設定・現在位置を .fyvideo に保存（{command_key()}+S）")
         self.project_save_button.clicked.connect(self._choose_project_save)
-        self.project_save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.project_save_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Save), self)
         self.project_save_shortcut.setAutoRepeat(False)
         self.project_save_shortcut.activated.connect(self.project_save_button.click)
         header.addWidget(self.project_save_button)

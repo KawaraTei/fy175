@@ -1,0 +1,65 @@
+name: macOS
+on:
+  push:
+    branches: [master, 'codex/issue-4-macos']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            python-arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+            python-arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      AUTO_MOSAIC_DEVICE: cpu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.python-arch }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+      - name: Setup
+        run: bash scripts/setup_macos.sh
+      - name: Focused source checks
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .venv/bin/python -m compileall -q auto_mosaic scripts tests
+          .venv/bin/python -m unittest tests.test_platform_support tests.test_layers tests.test_layer_ui tests.test_video -v
+          .venv/bin/python -m tests.smoke_models
+      - name: Capture native Qt windows
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: .venv/bin/python -m scripts.capture_macos_qa
+      - name: Build app
+        run: .venv/bin/python -m scripts.build_macos
+      - name: Test bundled models, layers and video
+        run: |
+          "dist/macos-${{ matrix.arch }}/FY175AutoMosaic.app/Contents/MacOS/FY175AutoMosaic" --smoke-test
+          "dist/macos-${{ matrix.arch }}/FY175AutoMosaic.app/Contents/MacOS/FY175AutoMosaic" --platform-smoke
+      - name: Archive app
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/macos-${{ matrix.arch }}/FY175AutoMosaic.app" "dist/FY175AutoMosaic-macos-${{ matrix.arch }}.zip"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-${{ matrix.arch }}
+          include-hidden-files: true
+          path: |
+            dist/FY175AutoMosaic-macos-${{ matrix.arch }}.zip
+            .codex-qa/macos/

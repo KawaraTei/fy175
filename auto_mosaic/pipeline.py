@@ -50,8 +50,13 @@ class MosaicPipeline:
         return restored[0] if restored is not None else self.analyze(path, settings)
 
     def analyze(self, path: Path, settings: ProcessingSettings) -> ProcessingResult:
+        return self.analyze_image(load_image_bgr(path), settings, source_path=path)
+
+    def analyze_image(
+        self, image: np.ndarray, settings: ProcessingSettings, *, source_path: Path
+    ) -> ProcessingResult:
+        """Analyze an already composed image using the same detection/mask pipeline."""
         with self._lock:
-            image = load_image_bgr(path)
             detector = self._get_detector(settings.mode)
             detection_candidates = detector.detect(
                 image,
@@ -91,7 +96,7 @@ class MosaicPipeline:
                 image, combined_mask, settings.effect, settings.effect_size
             )
             return ProcessingResult(
-                source_path=path,
+                source_path=source_path,
                 image_bgr=effected,
                 mask=combined_mask,
                 detections=detections,

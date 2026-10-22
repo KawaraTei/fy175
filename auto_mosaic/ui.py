@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from auto_mosaic.domain import EffectType, ImageMode, PREVIEW_VIEWS, PROCESSING_RANGES, ProcessingResult, ProcessingSettings
+from auto_mosaic.domain import EffectType, ImageMode, PREVIEW_VIEWS, PROCESSING_RANGES, TARGET_LABELS, ProcessingResult, ProcessingSettings
 from auto_mosaic.image_ops import (
     apply_effect,
     load_image_bgr,
@@ -277,6 +277,22 @@ class AutoMosaicWindow(QMainWindow):
         self.poll_timer.start(100)
         self._update_model_status()
         self.video_window = None
+        self.layer_windows = []
+
+    def _open_layer_mode(self, path: Path | None = None) -> None:
+        from auto_mosaic.layer_ui import LayerMosaicWindow
+
+        try:
+            settings = self._settings()
+        except ValueError as error:
+            self._notice("warning", "設定", str(error))
+            return
+        window = LayerMosaicWindow(self.model_dir, settings)
+        self.layer_windows.append(window)
+        window.destroyed.connect(lambda: self.layer_windows.remove(window))
+        window.show()
+        if path is not None:
+            window.load_path(path)
 
     def _open_video_mode(self) -> None:
         from auto_mosaic.video_ui import VideoMosaicWindow
@@ -349,6 +365,8 @@ class AutoMosaicWindow(QMainWindow):
         self.file_count_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.file_count_label.setObjectName("muted")
         target_layout.addWidget(self.file_count_label)
+        self.layer_mode_button = self._button("レイヤー画像(β)", lambda: self._open_layer_mode())
+        target_layout.addWidget(self.layer_mode_button)
 
         manual_panel = QWidget()
         manual_layout = QVBoxLayout(manual_panel)
@@ -450,9 +468,9 @@ class AutoMosaicWindow(QMainWindow):
         advanced.addSpacing(8)
 
         advanced.addWidget(self._section_label("検出対象"))
-        self.penis_check = QCheckBox("penis")
+        self.penis_check = QCheckBox(TARGET_LABELS["penis"])
         self.penis_check.setChecked(True)
-        self.vagina_check = QCheckBox("vagina / pussy")
+        self.vagina_check = QCheckBox(TARGET_LABELS["vagina"])
         self.vagina_check.setChecked(True)
         advanced.addWidget(self.penis_check)
         advanced.addWidget(self.vagina_check)
@@ -647,7 +665,7 @@ class AutoMosaicWindow(QMainWindow):
             self,
             "処理する画像を選択",
             "",
-            "画像 (*.png *.jpg *.jpeg);;すべてのファイル (*.*)",
+            "画像 (*.png *.jpg *.jpeg *.psd *.clip);;すべてのファイル (*.*)",
         )
         self._add_image_paths(Path(raw_path) for raw_path in paths)
 
@@ -656,6 +674,10 @@ class AutoMosaicWindow(QMainWindow):
         added = 0
         for raw_path in paths:
             path = Path(raw_path).resolve()
+            if path.is_file() and path.suffix.lower() in {".psd", ".clip"}:
+                self._open_layer_mode(path)
+                added += 1
+                continue
             if (
                 path.is_file()
                 and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
@@ -677,7 +699,7 @@ class AutoMosaicWindow(QMainWindow):
     def _has_supported_drop(event: QDragEnterEvent | QDropEvent) -> bool:
         return any(
             url.isLocalFile()
-            and Path(url.toLocalFile()).suffix.lower() in {".png", ".jpg", ".jpeg"}
+            and Path(url.toLocalFile()).suffix.lower() in {".png", ".jpg", ".jpeg", ".psd", ".clip"}
             for url in event.mimeData().urls()
         )
 

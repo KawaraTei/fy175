@@ -23,7 +23,7 @@ APP_STYLE = """
     QPushButton#restoreMask:enabled { background: #292e38; color: #bbc2cd; }
     QPushButton#restoreMask:enabled:hover { background: #3b4655; }
     QDoubleSpinBox:disabled, QSpinBox:disabled { background: #20232b; color: #858993; }
-    QListWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
+    QListWidget, QTreeWidget, QLineEdit, QComboBox { background: #111319; color: #e5e8ef; border: 1px solid #353a46; border-radius: 3px; padding: 6px; }
     QListWidget::item { padding: 5px; }
     QListWidget::item:selected { background: #356b92; color: white; }
     QComboBox QAbstractItemView { background: #111319; color: #e5e8ef; selection-background-color: #356b92; }

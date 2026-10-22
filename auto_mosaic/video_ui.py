@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSlider, QTableView, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from auto_mosaic.domain import EffectType, ImageMode, ProcessingSettings
+from auto_mosaic.domain import EffectType, ImageMode, ProcessingSettings, TARGET_LABELS
 from auto_mosaic.image_ops import apply_effect, visualize_detection
 from auto_mosaic.ui_style import APP_STYLE, section_label
 from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
@@ -238,8 +238,8 @@ class VideoMosaicWindow(QMainWindow):
         advanced.addWidget(self.mode)
         advanced.addSpacing(8)
         advanced.addWidget(section_label("検出対象"))
-        self.penis_check = QCheckBox("penis")
-        self.vagina_check = QCheckBox("vagina / pussy")
+        self.penis_check = QCheckBox(TARGET_LABELS["penis"])
+        self.vagina_check = QCheckBox(TARGET_LABELS["vagina"])
         for check in (self.penis_check, self.vagina_check):
             check.setChecked(True)
             advanced.addWidget(check)

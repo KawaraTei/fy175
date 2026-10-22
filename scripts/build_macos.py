@@ -48,7 +48,7 @@ def main():
     }, indent=2), encoding="utf-8")
     subprocess.run([sys.executable, "scripts/build_icon.py", "--macos"], cwd=ROOT, check=True)
     command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--onedir",
-               "--name", "FY175AutoMosaic", "--icon", "assets/app.icns",
+               "--name", "FY175AutoMosaic", "--icon", str(ROOT / "assets" / "app.icns"),
                "--osx-bundle-identifier", "com.github.KawaraTei.fy175",
                "--target-arch", arch, "--codesign-identity", args.codesign_identity,
                "--distpath", f"dist/macos-{arch}", "--workpath", f"build/macos-{arch}/pyinstaller",

@@ -43,6 +43,12 @@ def main():
                 app.processEvents()
                 window.refresh_preview()
                 window.grab().save(str(root / f"{extension[1:]}-{name}.png"))
+            # Visibility is independent of processing/detection and needs no reanalysis.
+            window.layers.topLevelItem(0).setCheckState(3, Qt.CheckState.Unchecked)
+            wait_idle(app, window)
+            window.grab().save(str(root / f"{extension[1:]}-hidden.png"))
+            window.layers.topLevelItem(0).setCheckState(3, Qt.CheckState.Checked)
+            wait_idle(app, window)
             window.resize(1260, 790)
             window.view.setCurrentText("元画像")
             app.processEvents()

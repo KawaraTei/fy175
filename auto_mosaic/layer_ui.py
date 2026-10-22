@@ -71,16 +71,16 @@ class LayerMosaicWindow(QMainWindow):
         left.addWidget(section_label("レイヤー"))
         self.layers = QTreeWidget()
         self.layers.setRootIsDecorated(False)
-        self.layers.setColumnCount(3)
-        self.layers.setHeaderLabels(["レイヤー名", "加工", "検出"])
+        self.layers.setColumnCount(4)
+        self.layers.setHeaderLabels(["レイヤー名", "加工", "検出", "表示"])
         self.layers.header().setStretchLastSection(False)
         self.layers.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2):
+        for column in (1, 2, 3):
             self.layers.header().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.layers.setColumnWidth(column, 48)
         self.layers.itemChanged.connect(self._layer_changed)
         left.addWidget(self.layers, 1)
-        self.layer_note = QLabel("加工：選んだレイヤーのみ変更\n検出：選んだ表示レイヤーを合成して解析")
+        self.layer_note = QLabel("加工：選んだレイヤーのみ変更\n検出：選んだレイヤーを合成して解析\n表示：プレビュー・保存結果に反映")
         self.layer_note.setWordWrap(True)
         left.addWidget(self.layer_note)
         self.warning = QLabel("合成結果は元の編集ソフトと異なる場合があります。\n保存前に処理結果を確認してください。")
@@ -246,8 +246,7 @@ class LayerMosaicWindow(QMainWindow):
             self.layers.blockSignals(True)
             self.layers.clear()
             for info in document.layers:
-                name = info.name + ("（非表示）" if not info.visible else "")
-                item = QTreeWidgetItem([name, "", ""])
+                item = QTreeWidgetItem([info.name, "", "", ""])
                 item.setData(0, Qt.ItemDataRole.UserRole, info.index)
                 item.setToolTip(0, info.name + ("\n" + info.reason if info.reason else ""))
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -256,11 +255,10 @@ class LayerMosaicWindow(QMainWindow):
                 else:
                     item.setText(1, "—")
                     item.setToolTip(1, info.reason)
-                if info.visible:
-                    item.setCheckState(2, Qt.CheckState.Checked)
-                else:
-                    item.setText(2, "—")
-                    item.setToolTip(2, "元画像で非表示のレイヤーは検出用合成に含めません")
+                for column in (2, 3):
+                    item.setCheckState(column, Qt.CheckState.Checked if info.visible else Qt.CheckState.Unchecked)
+                item.setToolTip(2, "表示のオン・オフに関係なく、選んだレイヤーを検出に使用します")
+                item.setToolTip(3, "プレビューと保存結果の表示を切り替えます。加工・検出の選択は変わりません")
                 self.layers.addTopLevelItem(item)
             self.layers.blockSignals(False)
             self.warning.setText(
@@ -287,12 +285,13 @@ class LayerMosaicWindow(QMainWindow):
     def _layer_changed(self, item, column):
         if column == 2:
             self._invalidate_detection()
-        elif column == 1:
+        elif column in (1, 3):
             self._schedule_render()
 
     def _schedule_render(self, *_):
         self.result = None
-        if self.mask is not None:
+        if self.document is not None:
+            self.dirty = True
             self.status.setText("処理結果を更新しています…")
             self.render_timer.start(150)
         self._controls()
@@ -312,31 +311,42 @@ class LayerMosaicWindow(QMainWindow):
         self.result = None
         self.mask = self.analysis = None
         processing = self.selected(1)
+        visible = self.selected(3)
         document = self.document
 
         def work():
             analysis = self.pipeline.analyze_image(document.detection_image(detection), settings, source_path=document.source)
-            return analysis, document.render(analysis.mask, processing, settings)
+            return analysis, document.render(analysis.mask, processing, settings, visible)
 
         def complete(value):
             self.analysis, result = value
             self.mask = self.analysis.mask
+            self.view.setCurrentText("処理結果")
             self._rendered(result)
 
         self._submit("選択レイヤーを解析しています…", work, complete)
 
     def render(self):
-        if self.busy or self.document is None or self.mask is None:
+        if self.busy or self.document is None:
+            return
+        visible = self.selected(3)
+        if self.mask is None:
+            self._submit("表示を更新しています…", lambda: self.document.composite_image(visible), self._previewed)
             return
         settings, indices, mask = self.settings(), self.selected(1), self.mask.copy()
-        self._submit("処理結果を更新しています…", lambda: self.document.render(mask, indices, settings), self._rendered)
+        self._submit("処理結果を更新しています…", lambda: self.document.render(mask, indices, settings, visible), self._rendered)
+
+    def _previewed(self, original):
+        self.original = original
+        self.status.setText("表示を更新しました。保存するには再解析してください。")
+        self.refresh_preview()
 
     def _rendered(self, result):
         self.result = result
+        self.original = result.original_bgra
         self.dirty = True
         count = len(self.analysis.detections) if self.analysis is not None else 0
         self.status.setText(f"検出 {count}件 / 加工対象 {len(self.selected(1))}レイヤー — 処理結果を確認して保存できます")
-        self.view.setCurrentText("処理結果")
         self.refresh_preview()
 
     def refresh_preview(self, *_):

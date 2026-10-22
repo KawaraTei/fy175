@@ -32,6 +32,7 @@ class LayerRender:
     bgra: np.ndarray
     document: bytes
     extension: str
+    original_bgra: np.ndarray
 
     def save(self, path: Path) -> None:
         """Never overwrite an existing artwork, including the input."""
@@ -127,6 +128,7 @@ class LayerDocument:
 
     def _layer_infos(self, reader):
         infos = []
+        self._ancestors = {}
         pending = [(index, (), True) for index in reader.children(-1)]
         while pending:
             index, ancestors, visible = pending.pop()
@@ -134,8 +136,9 @@ class LayerDocument:
             name = layer.name_unicode or f"レイヤー {index + 1}"
             shown = visible and layer.visible
             if layer.is_group:
-                pending.extend((child, (*ancestors, name), shown) for child in reader.children(index))
+                pending.extend((child, (*ancestors, index), shown) for child in reader.children(index))
                 continue
+            self._ancestors[index] = ancestors
             reason = ""
             if layer.width <= 0 or layer.height <= 0:
                 reason = "画素なし"
@@ -147,32 +150,45 @@ class LayerDocument:
                 reason = "加工にはラスタライズが必要"
             elif (layer.left, layer.top, layer.width, layer.height) != (0, 0, self.width, self.height):
                 reason = "加工にはキャンバス全体のラスターレイヤーが必要"
-            infos.append(LayerInfo(index, " / ".join((*ancestors, name)),
+            names = tuple(reader.layers[parent].name_unicode or f"レイヤー {parent + 1}" for parent in ancestors)
+            infos.append(LayerInfo(index, " / ".join((*names, name)),
                                    len(ancestors), shown, not reason, reason))
         return infos
 
-    def detection_image(self, indices: frozenset[int]) -> np.ndarray:
-        reader = self._read(self.snapshot)
+    def _set_visibility(self, reader, writer, indices):
         self._validate_indices(indices)
+        if indices == frozenset(info.index for info in self.layers if info.visible):
+            return  # Preserve original group/local flags when effective visibility is unchanged.
+        enabled_groups = {parent for index in indices for parent in self._ancestors[index]}
+        flags = {info.index: info.index in indices for info in self.layers}
+        flags.update({parent: True for parent in enabled_groups})
+        for index, visible in flags.items():
+            if self.extension == ".psd":
+                writer.layers[index].visible = visible
+            else:
+                writer.set_layer_attr(reader.layers[index].main_id, visible=int(visible))
+
+    def composite_image(self, indices: frozenset[int]) -> np.ndarray:
+        reader = self._read(self.snapshot)
         if self.extension == ".psd":
-            for info in self.layers:
-                if info.index not in indices:
-                    reader.layers[info.index].visible = False
-            return on_white(self._composite(reader))
+            self._set_visibility(reader, reader, indices)
+            return self._composite(reader)
         writer = clipparse.ClipWriter()
         writer.load(str(self.snapshot))
-        for info in self.layers:
-            if info.index not in indices:
-                writer.set_layer_attr(reader.layers[info.index].main_id, visible=0)
-        target = self.root / "detection.clip"
+        self._set_visibility(reader, writer, indices)
+        target = self.root / "composite.clip"
         writer.save(str(target))
-        return on_white(self._composite(self._read(target)))
+        return self._composite(self._read(target))
+
+    def detection_image(self, indices: frozenset[int]) -> np.ndarray:
+        return on_white(self.composite_image(indices))
 
     def _validate_indices(self, indices):
         if not indices <= {info.index for info in self.layers}:
             raise ValueError("存在しないレイヤーが選択されています。")
 
-    def render(self, mask: np.ndarray, indices: frozenset[int], settings: ProcessingSettings) -> LayerRender:
+    def render(self, mask: np.ndarray, indices: frozenset[int], settings: ProcessingSettings,
+               visible_indices: frozenset[int] | None = None) -> LayerRender:
         self._validate_indices(indices)
         if mask.shape != (self.height, self.width):
             raise ValueError("マスクのサイズがキャンバスと一致しません。")
@@ -182,6 +198,10 @@ class LayerDocument:
         writer = reader if self.extension == ".psd" else clipparse.ClipWriter()
         if self.extension == ".clip":
             writer.load(str(self.snapshot))
+        original = self.original
+        if visible_indices is not None:
+            self._set_visibility(reader, writer, visible_indices)
+            original = self.composite_image(visible_indices)
         for index in sorted(indices):
             layer = reader.layers[index]
             pixels = np.frombuffer(reader.layer_image(index, "image"), np.uint8).reshape(layer.height, layer.width, 4)
@@ -214,4 +234,4 @@ class LayerDocument:
             problems = clipparse.validate(str(target))
             if problems:
                 raise ValueError("CLIP保存データの検証に失敗しました: " + "; ".join(problems))
-        return LayerRender(merged, target.read_bytes(), self.extension)
+        return LayerRender(merged, target.read_bytes(), self.extension, original)

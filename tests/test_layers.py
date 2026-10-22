@@ -18,6 +18,63 @@ SETTINGS = ProcessingSettings(ImageMode.ILLUSTRATION, frozenset({"penis", "vagin
 
 
 class LayerTests(unittest.TestCase):
+    def test_visibility_preserves_hidden_pixels_and_detection_selection(self):
+        for extension in (".psd", ".clip"):
+            with self.subTest(extension=extension), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / ("visible" + extension)
+                background, top = make_layers(source)
+                document = LayerDocument(source)
+                try:
+                    mask = np.ones(background.shape[:2], bool)
+                    detection = document.detection_image(frozenset({1}))
+                    result = document.render(mask, frozenset({1}), SETTINGS, frozenset({0}))
+                    np.testing.assert_array_equal(result.bgra, background)
+                    np.testing.assert_array_equal(result.original_bgra, background)
+                    np.testing.assert_array_equal(document.detection_image(frozenset({1})), detection)
+                    output = root / ("hidden" + extension)
+                    result.save(output)
+                    reader = document._read(output)
+                    self.assertFalse(reader.layers[1].visible)
+                    hidden_pixels = np.frombuffer(reader.layer_image(1, "image"), np.uint8).reshape(top.shape)
+                    np.testing.assert_array_equal(hidden_pixels, effect_pixels(top, mask, SETTINGS))
+                    del reader
+                    reopened = LayerDocument(output)
+                    try:
+                        self.assertFalse(next(info.visible for info in reopened.layers if info.index == 1))
+                        shown = reopened.render(mask, frozenset(), SETTINGS, frozenset({0, 1}))
+                        self.assertTrue(np.any(shown.bgra != background))
+                        np.testing.assert_array_equal(reopened.detection_image(frozenset({1})), on_white(hidden_pixels))
+                        empty = reopened.render(mask, frozenset(), SETTINGS, frozenset())
+                        self.assertFalse(empty.bgra[..., 3].any())
+                    finally:
+                        reopened.close()
+                finally:
+                    document.close()
+
+    def test_show_child_of_hidden_group_without_showing_sibling(self):
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "group.psd"
+            psd = psdparse.PSDFile()
+            psd.create_blank(32, 32)
+            first = np.full((32, 32, 4), (10, 20, 30, 255), np.uint8)
+            second = np.full_like(first, (40, 50, 60, 255))
+            psd.add_layer("first", 0, 0, first.tobytes(), 32, 32)
+            psd.add_layer("second", 0, 0, second.tobytes(), 32, 32)
+            psd.add_folder("group", 0, 2)
+            next(layer for layer in psd.layers if layer.is_group).visible = False
+            psd.save(str(source))
+            del psd
+            document = LayerDocument(source)
+            try:
+                self.assertTrue(all(not info.visible for info in document.layers))
+                index = next(info.index for info in document.layers if info.name == "group / first")
+                result = document.render(np.zeros((32, 32), bool), frozenset(), SETTINGS, frozenset({index}))
+                np.testing.assert_array_equal(result.bgra, first)
+                np.testing.assert_array_equal(document.detection_image(frozenset({index})), on_white(first))
+            finally:
+                document.close()
+
     def test_selective_roundtrip_psd_and_clip(self):
         for extension in (".psd", ".clip"):
             with self.subTest(extension=extension), TemporaryDirectory() as temporary:

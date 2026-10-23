@@ -6,6 +6,68 @@ import clipparse
 import psdparse
 
 
+def edit_clip_metadata(path, edit):
+    """Modify a synthetic fixture's SQL, retaining the actual pixel chunks."""
+    from clipparse_tools.clip_write import ClipFile
+    file = ClipFile(str(path))
+    try:
+        edit(file.db)
+        file.save(str(path))
+    finally:
+        file.close()
+
+
+def move_clip_layer(path, x, y, render_x=0, render_y=0, baked=None):
+    def edit(db):
+        columns = {r[1] for r in db.execute("PRAGMA table_info(Layer)")}
+        if "DrawToRenderOffscreenType" not in columns:
+            db.execute("ALTER TABLE Layer ADD COLUMN DrawToRenderOffscreenType INTEGER")
+        db.execute("UPDATE Layer SET LayerOffsetX=?, LayerOffsetY=?, LayerRenderOffscrOffsetX=?, "
+                   "LayerRenderOffscrOffsetY=?, DrawToRenderOffscreenType=? WHERE LayerName=?",
+                   (x, y, render_x, render_y, baked, "加工対象の模様"))
+    edit_clip_metadata(path, edit)
+
+
+def group_clip_with_mask(path, mask, *, pass_through=False):
+    """Turn the background fixture into a folder with a single-channel mask."""
+    import struct
+    from clipparse_tools.clip_write import ClipFile, as_str
+    from clipparse_tools.clip_encode import build_block_record, build_trailers, patch_block_sizes
+    native = clipparse.ClipFile()
+    native.load(str(path))
+    group, child = [layer.main_id for layer in native.layers]
+    del native
+    file = ClipFile(str(path))
+    try:
+        db = file.db
+        mip = db.execute("SELECT LayerRenderMipmap FROM Layer WHERE MainId=?", (group,)).fetchone()[0]
+        off = db.execute("SELECT Offscreen FROM MipmapInfo WHERE MainId=(SELECT BaseMipmapInfo FROM Mipmap WHERE MainId=?)", (mip,)).fetchone()[0]
+        attr, external = db.execute("SELECT Attribute, BlockData FROM Offscreen WHERE MainId=?", (off,)).fetchone()
+        attr = bytearray(attr)
+        # Parameter section: mode=mask, no color planes, one 8-bit alpha block.
+        for field, value in ((4, 1), (6, 0), (7, 1), (8, 0), (9, 0), (10, 0)):
+            struct.pack_into(">I", attr, 38 + field * 4, value)
+        block = np.zeros((256, 256), np.uint8)
+        block[:mask.shape[0], :mask.shape[1]] = mask
+        record = bytearray(build_block_record(0, block.tobytes(), 256, 256))
+        struct.pack_into(">I", record, 50, block.size)
+        attr = patch_block_sizes(bytes(attr), [len(record)])
+        db.execute("UPDATE Offscreen SET Attribute=? WHERE MainId=?", (attr, off))
+        for index, (eid, _) in enumerate(file.externals):
+            if as_str(eid) == as_str(external):
+                file.externals[index] = (eid, bytes(record) + build_trailers([1], [0]))
+                break
+        db.execute("UPDATE Layer SET LayerFolder=17, LayerType=LayerType|2, LayerComposite=?, "
+                   "LayerOpacity=128, LayerFirstChildIndex=?, LayerNextIndex=0, "
+                   "LayerLayerMaskMipmap=LayerRenderMipmap, LayerRenderMipmap=0, "
+                   "LayerOffsetX=7, LayerOffsetY=-3, LayerMaskOffsetX=5, LayerMaskOffsetY=9, "
+                   "LayerMaskOffscrOffsetX=-2, LayerMaskOffscrOffsetY=1 WHERE MainId=?",
+                   (30 if pass_through else 0, child, group))
+        file.save(str(path))
+    finally:
+        file.close()
+
+
 def make_layers(path: Path, width=128, height=96):
     destination = path
     path = path.with_name("fixture" + path.suffix)

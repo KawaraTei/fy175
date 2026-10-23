@@ -101,11 +101,12 @@ class LayerDocument:
         self.width, self.height = self._size(reader)
         if self.extension == ".psd" and (reader.header.depth != 8 or reader.header.mode != 3):
             raise ValueError("レイヤー加工は8bit RGBのPSDに対応しています。RGB・8bitへ変換してください。")
-        self.layers = self._layer_infos(reader)
-        self.original = self._composite(reader)
         from auto_mosaic.layer_preview import ClipDisplay, PsdDisplay
         self.display = (PsdDisplay(self, self._memory_psd()) if self.extension == ".psd"
                         else ClipDisplay(self, reader))
+        self.layers = self._layer_infos(reader)
+        self.original = (self._composite(reader) if self.extension == ".psd" else
+                         self.composite_image(frozenset(info.index for info in self.layers if info.visible)))
 
     def _memory_psd(self):
         reader = psdparse.PSDFile()
@@ -128,12 +129,10 @@ class LayerDocument:
         return header.width, header.height
 
     def _composite(self, reader):
-        if self.extension == ".psd":
-            pixels, stats = reader.composite()
-            if any(stats.values()):
-                raise ValueError("再現できないPSDの合成効果があります。該当する効果をラスタライズしてください。")
-        else:
-            pixels = reader.merged_image()
+        """PSD native composition. CLIP always uses the shared coordinate path."""
+        pixels, stats = reader.composite()
+        if any(stats.values()):
+            raise ValueError("再現できないPSDの合成効果があります。該当する効果をラスタライズしてください。")
         return np.frombuffer(pixels, np.uint8).reshape(self.height, self.width, 4).copy()
 
     def _layer_infos(self, reader):
@@ -150,16 +149,18 @@ class LayerDocument:
                 continue
             self._ancestors[index] = ancestors
             reason = ""
-            if layer.width <= 0 or layer.height <= 0:
+            if self.extension == ".clip":
+                placement = self.display.placements.get(index)
+                if placement is None:
+                    reason = "画素なし"
+                elif not placement.editable:
+                    reason = "加工にはラスタライズが必要"
+            elif layer.width <= 0 or layer.height <= 0:
                 reason = "画素なし"
             elif self.extension == ".psd":
                 if (layer.layer_type != psdparse.LayerType.NORMAL or layer.smart_object is not None
                         or layer.vector_mask is not None or layer.pixel_data_irrelevant):
                     reason = "加工にはラスタライズが必要"
-            elif layer.is_text or layer.is_filter:
-                reason = "加工にはラスタライズが必要"
-            elif (layer.left, layer.top, layer.width, layer.height) != (0, 0, self.width, self.height):
-                reason = "加工にはキャンバス全体のラスターレイヤーが必要"
             names = tuple(reader.layers[parent].name_unicode or f"レイヤー {parent + 1}" for parent in ancestors)
             infos.append(LayerInfo(index, " / ".join((*names, name)),
                                    len(ancestors), shown, not reason, reason))
@@ -179,16 +180,13 @@ class LayerDocument:
                 writer.set_layer_attr(reader.layers[index].main_id, visible=int(visible))
 
     def composite_image(self, indices: frozenset[int]) -> np.ndarray:
+        self._validate_indices(indices)
         reader = self._read(self.snapshot)
         if self.extension == ".psd":
             self._set_visibility(reader, reader, indices)
             return self._composite(reader)
-        writer = clipparse.ClipWriter()
-        writer.load(str(self.snapshot))
-        self._set_visibility(reader, writer, indices)
-        target = self.root / "composite.clip"
-        writer.save(str(target))
-        return self._composite(self._read(target))
+        from auto_mosaic.layer_preview import ClipDisplay
+        return ClipDisplay(self, reader, full_size=True).image(indices)
 
     def detection_image(self, indices: frozenset[int]) -> np.ndarray:
         return on_white(self.composite_image(indices))
@@ -203,6 +201,16 @@ class LayerDocument:
             raise ValueError("マスクのサイズがキャンバスと一致しません。")
         if any(not info.editable and info.index in indices for info in self.layers):
             raise ValueError("加工対象にはラスターレイヤーを選んでください。")
+        if self.extension == ".clip":
+            from auto_mosaic.clip_geometry import ClipReader, read_pixels
+            with ClipReader(self.snapshot) as source:
+                for index in sorted(indices):
+                    placement = self.display.placements[index]
+                    local_mask = placement.local_mask(mask)
+                    if local_mask.any():
+                        pixels = read_pixels(source, reader, index, placement)
+                        yield index, effect_pixels(pixels, local_mask, settings)
+            return
         for index in sorted(indices):
             layer = reader.layers[index]
             pixels = np.frombuffer(reader.layer_image(index, "image"), np.uint8).reshape(layer.height, layer.width, 4)
@@ -235,34 +243,49 @@ class LayerDocument:
             raise ValueError("マスクのサイズがキャンバスと一致しません。")
         if any(not info.editable and info.index in indices for info in self.layers):
             raise ValueError("加工対象にはラスターレイヤーを選んでください。")
-        reader = self._read(self.snapshot)
-        writer = reader if self.extension == ".psd" else clipparse.ClipWriter()
         if self.extension == ".clip":
-            writer.load(str(self.snapshot))
+            return self._render_clip(mask, indices, settings, visible_indices)
+        reader = writer = self._read(self.snapshot)
         original = self.original
         if visible_indices is not None:
             self._set_visibility(reader, writer, visible_indices)
             original = self.composite_image(visible_indices)
         for index, edited in self._edited_pixels(reader, mask, indices, settings):
             layer = reader.layers[index]
-            if self.extension == ".psd":
-                writer.set_layer_pixels(index, edited.tobytes(), layer.width, layer.height)
-            else:
-                writer.set_pixels(layer.main_id, edited.tobytes(), layer.width, layer.height)
+            writer.set_layer_pixels(index, edited.tobytes(), layer.width, layer.height)
         target = self.root / ("result" + self.extension)
-        if self.extension == ".psd":
-            merged = self._composite(writer)
-            writer.set_merged_image(merged.tobytes())
-            if not writer.save(str(target)):
-                raise OSError("PSDの保存に失敗しました。")
-        else:
-            writer.save(str(target))
-            merged = self._composite(self._read(target))
-            writer = clipparse.ClipWriter()
-            writer.load(str(target))
-            writer.set_canvas_preview(merged.tobytes(), self.width, self.height)
-            writer.save(str(target))
-            problems = clipparse.validate(str(target))
-            if problems:
-                raise ValueError("CLIP保存データの検証に失敗しました: " + "; ".join(problems))
+        merged = self._composite(writer)
+        writer.set_merged_image(merged.tobytes())
+        if not writer.save(str(target)):
+            raise OSError("PSDの保存に失敗しました。")
+        return LayerRender(merged, target.read_bytes(), self.extension, original)
+
+    def _render_clip(self, mask, indices, settings, visible_indices):
+        from auto_mosaic.layer_preview import ClipDisplay
+        visible = (frozenset(info.index for info in self.layers if info.visible)
+                   if visible_indices is None else visible_indices)
+        self._validate_indices(visible)
+        reader = self._read(self.snapshot)
+        original = ClipDisplay(self, reader, full_size=True).image(visible)
+        writer = clipparse.ClipWriter()
+        writer.load(str(self.snapshot))
+        self._set_visibility(reader, writer, visible)
+        for index, pixels in self._edited_pixels(reader, mask, indices, settings):
+            # Write in the original offscreen's coordinates and dimensions.
+            # The saved offsets and transform metadata remain untouched.
+            writer.set_pixels(reader.layers[index].main_id, pixels.tobytes(), pixels.shape[1], pixels.shape[0])
+        # Decode the written local rasters through the same geometry/compositor.
+        # This temporary native file is export-only and avoids holding all edited
+        # full-resolution layers in memory simultaneously.
+        edited_path = self.root / "edited.clip"
+        writer.save(str(edited_path))
+        edited_reader = self._read(edited_path)
+        merged = ClipDisplay(self, edited_reader, full_size=True, source_path=edited_path).image(visible)
+        del edited_reader
+        writer.set_canvas_preview(merged.tobytes(), self.width, self.height)
+        target = self.root / "result.clip"
+        writer.save(str(target))
+        problems = clipparse.validate(str(target))
+        if problems:
+            raise ValueError("CLIP保存データの検証に失敗しました: " + "; ".join(problems))
         return LayerRender(merged, target.read_bytes(), self.extension, original)

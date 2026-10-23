@@ -41,7 +41,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           .venv/bin/python -m compileall -q auto_mosaic scripts tests
-          .venv/bin/python -m unittest tests.test_platform_support tests.test_layers tests.test_layer_ui tests.test_video -v
+          .venv/bin/python -m unittest tests.test_platform_support tests.test_layers tests.test_clip_geometry tests.test_layer_ui tests.test_video -v
           .venv/bin/python -m tests.smoke_models
       - name: Capture native Qt windows
         env:

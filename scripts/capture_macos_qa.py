@@ -12,6 +12,7 @@ def main():
         raise SystemExit("Run this capture on macOS.")
     os.environ["QT_QPA_PLATFORM"] = "cocoa"
     from scripts.capture_layer_qa import main as capture_layers
+    from scripts.capture_clip_geometry_qa import main as capture_coordinates
     from auto_mosaic.platform_support import default_output_dir, command_key
     from auto_mosaic.video_io import tool_path
     from auto_mosaic.ui import AutoMosaicWindow
@@ -20,8 +21,14 @@ def main():
     from PySide6.QtGui import QKeySequence
 
     capture_layers()
+    capture_coordinates()
     destination = Path(".codex-qa/macos")
     destination.mkdir(parents=True, exist_ok=True)
+    coordinate_destination = destination / "coordinates"
+    coordinate_destination.mkdir(exist_ok=True)
+    for source in Path(".codex-qa/layers/coordinates").iterdir():
+        if source.suffix in {".png", ".json"}:
+            shutil.copyfile(source, coordinate_destination / source.name)
     for source in Path(".codex-qa/layers").glob("*.png"):
         shutil.copyfile(source, destination / source.name)
     app = QApplication.instance()

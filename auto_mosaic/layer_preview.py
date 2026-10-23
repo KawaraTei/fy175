@@ -1,9 +1,7 @@
 """In-memory display caches. Native document serialization belongs to export only."""
 from collections import OrderedDict
+from contextlib import nullcontext
 import copy
-from pathlib import Path
-import sqlite3
-import struct
 from types import SimpleNamespace
 
 import cv2
@@ -71,72 +69,71 @@ class PsdDisplay(DisplayCache):
 
 class ClipDisplay(DisplayCache):
     """Cache decoded pixels; use clipparse's reference blend equations and tree rules."""
-    def __init__(self, document, reader):
+    def __init__(self, document, reader, *, full_size=False, source_path=None):
         super().__init__()
         self.document = document
+        self.full_size = full_size
+        self.source_path = source_path or document.snapshot
+        self.native = reader if full_size else None
         # Native LayerInfo objects borrow the reader's storage; retain value copies.
         fields = ("is_group", "is_filter", "width", "height", "left", "top", "main_id",
                   "has_mask", "composite_raw", "opacity_raw", "clipping")
         self.layers = [SimpleNamespace(**{key: getattr(layer, key) for key in fields}) for layer in reader.layers]
         self.children = {-1: list(reader.children(-1))}
         self.children.update({i: list(reader.children(i)) for i, layer in enumerate(self.layers) if layer.is_group})
-        self.size = display_size(document.width, document.height)
+        self.size = ((document.width, document.height) if full_size
+                     else display_size(document.width, document.height))
         self.pixels = {}
         self.masks = {}
         self.filters = {}
-        # Only metadata is read here. No temporary CLIP or SQLite files are written.
-        with document.snapshot.open("rb") as stream:
-            header = stream.read(24)
-            header_length = struct.unpack_from(">Q", header, 16)[0]
-            stream.seek(header_length + 24)
-            sql_offset = struct.unpack(">Q", stream.read(8))[0]
-            stream.seek(sql_offset)
-            kind, length = struct.unpack(">8sQ", stream.read(16))
-            if kind != b"CHNKSQLi":
-                raise ValueError("CLIPのメタデータを読み込めません。")
-            db = sqlite3.connect(":memory:")
-            try:
-                db.deserialize(stream.read(length))
-                columns = {row[1] for row in db.execute("PRAGMA table_info(Layer)")}
-                if "FilterLayerInfo" in columns:
-                    self.filters = dict(db.execute("SELECT MainId, FilterLayerInfo FROM Layer WHERE FilterLayerInfo IS NOT NULL"))
-            finally:
-                db.close()
-        mask_reader = None
-        try:
-            for index, layer in enumerate(self.layers):
-                if layer.width > 0 and layer.height > 0 and not layer.is_group and not layer.is_filter:
-                    raw = reader.layer_image(index, "image")
-                    if raw:
-                        pixels = np.frombuffer(raw, np.uint8).reshape(layer.height, layer.width, 4)
-                        self.pixels[index] = self.place(pixels, layer)
+        self.placements = {}
+        if full_size:
+            # Geometry is authoritative in the initial snapshot. Full-resolution
+            # detection/export decode one layer at a time instead of retaining
+            # a canvas-sized buffer for every layer in a complex document.
+            self.filters = document.display.filters
+            self.placements = document.display.placements
+            return
+        from auto_mosaic.clip_geometry import ClipReader, raster_placement, read_pixels, read_mask
+        with ClipReader(document.snapshot) as source:
+            for index, layer in enumerate(reader.layers):
+                self.filters[layer.main_id] = source.rows[layer.main_id].get("FilterLayerInfo")
+                if not layer.is_group and not layer.is_filter:
+                    placement = raster_placement(source, layer)
+                    if placement is not None:
+                        self.placements[index] = placement
+                        self.pixels[index] = self.place(read_pixels(source, reader, index, placement), index)
                 if layer.has_mask:
-                    # Group masks are not exposed by the native layer_image API.
-                    if mask_reader is None:
-                        mask_reader = clip_blend.ClipFile(str(document.snapshot))
-                    off = mask_reader.top_offscreen(layer.main_id, mask=True)
-                    if off is not None and mask_reader.has_pixels(off):
-                        mask = clip_blend.fit_canvas(mask_reader.offscreen_image(off), document.width, document.height)
-                        self.masks[index] = cv2.resize(mask[..., 3], self.size, interpolation=cv2.INTER_AREA)
-        finally:
-            if mask_reader is not None:
-                mask_reader.db.close()
-                Path(mask_reader.tmp).unlink(missing_ok=True)
+                    mask = read_mask(source, layer, (document.width, document.height))
+                    if mask is not None:
+                        self.masks[index] = cv2.resize(mask, self.size, interpolation=cv2.INTER_AREA)
 
-    def place(self, pixels, layer):
-        canvas = clip_blend.place(pixels, (layer.left, layer.top), self.document.width, self.document.height)
-        return thumbnail(canvas, self.size)
+    def place(self, pixels, index):
+        canvas = self.placements[index].canvas(pixels, (self.document.width, self.document.height))
+        return canvas if self.full_size else thumbnail(canvas, self.size)
 
     def with_pixels(self, changes):
         result = copy.copy(self)
         result.cache = OrderedDict()
         result.pixels = self.pixels.copy()
         for index, pixels in changes:
-            result.pixels[index] = self.place(pixels, self.layers[index])
+            result.pixels[index] = pixels if self.full_size else self.place(pixels, index)
         return result
 
     def compose(self, visible):
+        from auto_mosaic.clip_geometry import ClipReader, read_pixels, read_mask
         enabled = visible | {parent for index in visible for parent in self.document._ancestors[index]}
+        def pixels_for(index):
+            if not self.full_size:
+                return self.pixels.get(index)
+            placement = self.placements.get(index)
+            if placement is None:
+                return None
+            raw = self.pixels.get(index)
+            if raw is None:
+                raw = read_pixels(source, self.native, index, placement)
+            return self.place(raw, index)
+
         def draw(parent, dst=None):
             if dst is None:
                 dst = np.zeros((self.size[1], self.size[0], 4), np.uint8)
@@ -145,8 +142,18 @@ class ClipDisplay(DisplayCache):
                 if index not in enabled:
                     continue
                 layer = self.layers[index]
+                mask = (read_mask(source, layer, self.size) if self.full_size and layer.has_mask
+                        else self.masks.get(index))
                 if layer.is_group and layer.composite_raw == 30:
-                    dst = draw(index, dst)
+                    if mask is None and layer.opacity_raw == 256:
+                        dst = draw(index, dst)
+                    else:
+                        before = dst
+                        after = draw(index, dst.copy())
+                        coverage = np.full(dst.shape[:2], layer.opacity_raw / 256, np.float32)
+                        if mask is not None:
+                            coverage *= mask / 255
+                        dst = interpolate_composite(before, after, coverage)
                     clip_base = None
                     continue
                 if layer.is_filter:
@@ -155,12 +162,12 @@ class ClipDisplay(DisplayCache):
                         rgba = clip_blend.apply_filter(dst[..., [2, 1, 0, 3]], bytes(blob))
                         dst = rgba[..., [2, 1, 0, 3]]
                     continue
-                pixels = draw(index) if layer.is_group else self.pixels.get(index)
+                pixels = draw(index) if layer.is_group else pixels_for(index)
                 if pixels is None:
                     continue
                 pixels = pixels.copy()
-                if index in self.masks:
-                    pixels[..., 3] = pixels[..., 3].astype(np.uint32) * self.masks[index] // 255
+                if mask is not None:
+                    pixels[..., 3] = pixels[..., 3].astype(np.uint32) * mask // 255
                 if layer.opacity_raw < 256:
                     pixels[..., 3] = pixels[..., 3].astype(np.uint32) * layer.opacity_raw // 256
                 if layer.clipping and clip_base is not None:
@@ -174,7 +181,23 @@ class ClipDisplay(DisplayCache):
                     dst = clip_blend.blend_over(dst[..., [2, 1, 0, 3]], pixels[..., [2, 1, 0, 3]],
                                                layer.composite_raw)[..., [2, 1, 0, 3]]
             return dst
-        return draw(-1)
+        try:
+            with ClipReader(self.source_path) if self.full_size else nullcontext() as source:
+                return draw(-1)
+        finally:
+            # Recursive closures otherwise retain the native file mapping until
+            # cyclic GC, preventing a subsequent export/cleanup on Windows.
+            draw = None
+
+
+def interpolate_composite(before, after, coverage):
+    """Mask a pass-through group's contribution, keeping its backdrop intact."""
+    weight = coverage[..., None]
+    a0, a1 = before[..., 3:4] / 255, after[..., 3:4] / 255
+    alpha = a0 * (1 - weight) + a1 * weight
+    color = before[..., :3] * a0 * (1 - weight) + after[..., :3] * a1 * weight
+    color = np.divide(color, alpha, out=np.zeros_like(color), where=alpha > 0)
+    return np.clip(np.rint(np.concatenate((color, alpha * 255), axis=2)), 0, 255).astype(np.uint8)
 
 
 class PreparedLayers:

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from auto_mosaic.domain import Detection, ProcessingResult
 from auto_mosaic.layer_ui import LayerMosaicWindow
-from tests.layer_fixtures import make_layers
+from tests.layer_fixtures import make_layers, move_clip_layer
 from tests.test_layers import SETTINGS
 
 
@@ -96,6 +96,8 @@ class LayerUiTests(unittest.TestCase):
                 root = Path(temporary)
                 source = root / ("manual" + extension)
                 _, top = make_layers(source)
+                if extension == ".clip":
+                    move_clip_layer(source, 20, -12)
                 window = LayerMosaicWindow(Path("models"), SETTINGS)
                 window.pipeline.analyze_image = Mock(side_effect=synthetic_analysis)
                 window.show()
@@ -148,7 +150,11 @@ class LayerUiTests(unittest.TestCase):
                     reader = window.document._read(output)
                     actual = np.frombuffer(reader.layer_image(1, "image"), np.uint8).reshape(top.shape)
                     from auto_mosaic.layers import effect_pixels
-                    np.testing.assert_array_equal(actual, effect_pixels(top, edited, SETTINGS))
+                    local_mask = edited
+                    if extension == ".clip":
+                        local_mask = np.zeros_like(edited)
+                        local_mask[12:, :108] = edited[:84, 20:]
+                    np.testing.assert_array_equal(actual, effect_pixels(top, local_mask, SETTINGS))
                     del reader
                     self.assertFalse(warnings.called, warnings.call_args_list)
                     window.close()

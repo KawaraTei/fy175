@@ -19,6 +19,18 @@ SETTINGS = ProcessingSettings(ImageMode.ILLUSTRATION, frozenset({"penis", "vagin
 
 
 class LayerTests(unittest.TestCase):
+    def test_preview_downscale_does_not_bleed_transparent_rgb(self):
+        from auto_mosaic.layer_preview import thumbnail
+        pixels = np.zeros((32, 32, 4), np.uint8)
+        pixels[..., 0] = 255
+        pixels[7:25, 7:25] = (0, 0, 255, 128)
+        image = thumbnail(pixels, (8, 8))
+        colored = image[..., 3] > 0
+        self.assertTrue(colored.any())
+        self.assertFalse(image[..., 0][colored].any())
+        self.assertTrue(np.all(image[..., 2][colored] == 255))
+        self.assertLessEqual(image[..., 3].max(), 128)
+
     def test_cached_display_does_not_read_write_or_reprocess(self):
         for extension in (".psd", ".clip"):
             with self.subTest(extension=extension), TemporaryDirectory() as temporary:

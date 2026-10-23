@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from clipparse_tools import clip_lazy_demo as clip_blend
 from PySide6.QtGui import QImage, QPainter
+from PySide6.QtCore import Qt
 
 DISPLAY_MAX_SIDE = 1024
 
@@ -31,13 +32,14 @@ def normal_over(dst, src):
 def thumbnail(pixels, size):
     if pixels.shape[1::-1] == size:
         return pixels.copy()
-    # Resize premultiplied pixels to avoid hidden RGB bleeding into translucent edges.
-    alpha = pixels[..., 3:4].astype(np.float32) / 255
-    scaled = cv2.resize(np.concatenate((pixels[..., :3] * alpha, alpha), axis=2), size,
-                        interpolation=cv2.INTER_AREA)
-    color = np.divide(scaled[..., :3], scaled[..., 3:4], out=np.zeros_like(scaled[..., :3]),
-                      where=scaled[..., 3:4] > 0)
-    return np.clip(np.rint(np.concatenate((color, scaled[..., 3:4] * 255), axis=2)), 0, 255).astype(np.uint8)
+    # Use Qt's native premultiplied scaler; avoid full-canvas float temporaries.
+    h, w = pixels.shape[:2]
+    pixels = np.ascontiguousarray(pixels)
+    image = QImage(pixels.data, w, h, w * 4, QImage.Format.Format_ARGB32)
+    scaled = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied).scaled(
+        *size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+    ).convertToFormat(QImage.Format.Format_ARGB32)
+    return np.frombuffer(scaled.constBits(), np.uint8).reshape(size[1], size[0], 4).copy()
 
 
 class DisplayCache:

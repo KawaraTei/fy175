@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 import queue
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap
+import cv2
+from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtGui import QImage, QPixmap, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
     QHeaderView, QLabel, QMainWindow, QMessageBox, QPushButton, QSpinBox, QSizePolicy,
@@ -16,11 +18,13 @@ from PySide6.QtWidgets import (
 )
 
 from auto_mosaic.domain import EffectType, ImageMode, PROCESSING_RANGES, ProcessingSettings, TARGET_LABELS
-from auto_mosaic.image_ops import visualize_detection
+from auto_mosaic.image_ops import visualize_detection, paint_mask_stroke
 from auto_mosaic.layers import LayerDocument, on_white
 from auto_mosaic.pipeline import MosaicPipeline
 from auto_mosaic.settings_ui import AdvancedSettingsDialog
 from auto_mosaic.ui_style import APP_STYLE, section_label
+from auto_mosaic.ui import MaskPreviewLabel
+from auto_mosaic.platform_support import command_key, option_key
 
 
 class LayerMosaicWindow(QMainWindow):
@@ -40,6 +44,13 @@ class LayerMosaicWindow(QMainWindow):
         self.mask = None
         self.busy = False
         self.dirty = False
+        self.preview_busy = False
+        self.preview_generation = 0
+        self.editing = False
+        self.manual_mask = False
+        self.undo_history = deque()
+        self.stroke_before = None
+        self.embedding = None
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="layer-image")
         self.events = queue.Queue()
         self._build()
@@ -141,15 +152,45 @@ class LayerMosaicWindow(QMainWindow):
         body.addWidget(self.panel)
         right = QVBoxLayout()
         self.view = QComboBox()
-        self.view.addItems(["元画像", "検出範囲", "処理結果"])
+        self.view.addItems(["元画像", "検出範囲", "マスク範囲", "処理結果"])
         self.view.currentIndexChanged.connect(self.refresh_preview)
         right.addWidget(self.view)
-        self.preview = QLabel("レイヤー画像を開いてください")
+        self.preview = MaskPreviewLabel("レイヤー画像を開いてください")
+        self.preview.stroke_started.connect(self._begin_stroke)
+        self.preview.stroke_requested.connect(self._paint_stroke)
+        self.preview.stroke_finished.connect(self._finish_stroke)
+        self.preview.region_requested.connect(self._select_region)
         self.preview.setObjectName("preview")
         self.preview.setMinimumSize(1, 1)
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         right.addWidget(self.preview, 1)
+        # Keep editing controls in the existing left panel; preserve the canvas area.
+        self.edit_button = QPushButton("マスクを編集")
+        self.edit_button.clicked.connect(self._toggle_edit)
+        left.insertWidget(left.count() - 1, self.edit_button)
+        self.edit_tools = QWidget()
+        edit_layout = QVBoxLayout(self.edit_tools)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
+        brush_row = QHBoxLayout()
+        brush_row.addWidget(QLabel("ブラシ"))
+        self.brush_size = QSpinBox()
+        self.brush_size.setRange(1, 1000)
+        self.brush_size.setValue(20)
+        self.brush_size.setSuffix(" px")
+        self.brush_size.valueChanged.connect(self.refresh_preview)
+        brush_row.addWidget(self.brush_size)
+        self.undo_button = QPushButton("元に戻す")
+        self.undo_button.clicked.connect(self._undo_mask)
+        brush_row.addWidget(self.undo_button)
+        edit_layout.addLayout(brush_row)
+        hint = QLabel(f"ドラッグ：追加 / {option_key()}：削除\nShift+クリック：領域追加 / {command_key()}+Shift：領域削除")
+        hint.setWordWrap(True)
+        edit_layout.addWidget(hint)
+        left.insertWidget(left.count() - 1, self.edit_tools)
+        self.edit_tools.hide()
+        self.undo_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self)
+        self.undo_shortcut.activated.connect(self._undo_mask)
         save_row = QHBoxLayout()
         self.flatten_button = QPushButton("統合画像を保存")
         self.flatten_button.clicked.connect(lambda: self.choose_save(False))
@@ -164,9 +205,9 @@ class LayerMosaicWindow(QMainWindow):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
-    def settings(self):
+    def settings(self, require_targets=True):
         targets = frozenset(key for key, check in self.target_checks.items() if check.isChecked())
-        if not targets:
+        if not targets and require_targets:
             raise ValueError("検出対象を1つ以上選択してください。")
         return replace(self.base_settings, mode=ImageMode.PHOTO if self.mode.currentIndex() == 0 else ImageMode.ILLUSTRATION,
                        targets=targets, effect=EffectType.MOSAIC if self.effect.currentIndex() == 0 else EffectType.BLUR,
@@ -185,28 +226,40 @@ class LayerMosaicWindow(QMainWindow):
         self.status.setText(message)
         self._controls()
         future = self.executor.submit(work)
-        future.add_done_callback(lambda done: self.events.put((done, complete)))
+        future.add_done_callback(lambda done: self.events.put((done, complete, True)))
 
     def _poll(self):
         try:
-            done, complete = self.events.get_nowait()
+            done, complete, blocking = self.events.get_nowait()
         except queue.Empty:
             return
-        self.busy = False
+        if blocking:
+            self.busy = False
         try:
             complete(done.result())
         except Exception as error:
+            if not blocking:
+                self.preview_busy = False
             self.status.setText(f"エラー: {error}")
             QMessageBox.warning(self, "レイヤー画像", str(error))
         self._controls()
 
     def _controls(self):
         ready = self.document is not None and not self.busy
-        self.open_button.setEnabled(not self.busy)
+        self.open_button.setEnabled(not self.busy and not self.preview_busy)
         self.panel.setEnabled(ready)
         self.advanced.setEnabled(ready)
         self.analyze_button.setEnabled(ready)
-        can_save = ready and self.result is not None
+        self.edit_button.setEnabled(ready and not self.preview_busy)
+        self.edit_tools.setVisible(self.editing)
+        self.edit_button.setText("マスク編集を終了" if self.editing else "マスクを編集")
+        self.undo_button.setEnabled(ready and bool(self.undo_history) and self.stroke_before is None)
+        self.undo_shortcut.setEnabled(self.editing and self.undo_button.isEnabled())
+        can_paint = (ready and self.editing and not self.preview_busy
+                     and self.view.currentText() in {"検出範囲", "マスク範囲"})
+        if self.preview.mask_editing != can_paint:
+            self.preview.set_mask_editing(can_paint)
+        can_save = ready and self.result is not None and not self.preview_busy and not self.editing
         if hasattr(self, "render_timer"):
             can_save = can_save and not self.render_timer.isActive()
         self.flatten_button.setEnabled(can_save)
@@ -225,7 +278,7 @@ class LayerMosaicWindow(QMainWindow):
             self.load_path(Path(path))
 
     def load_path(self, path):
-        if self.busy or not self._confirm_discard():
+        if self.busy or self.preview_busy or not self._confirm_discard():
             return
         self.render_timer.stop()
         previous = self.document
@@ -241,6 +294,9 @@ class LayerMosaicWindow(QMainWindow):
             self.original = document.original
             self.mask = self.result = self.analysis = None
             self.dirty = False
+            self.editing = self.manual_mask = False
+            self.undo_history.clear()
+            self.embedding = None
             self.filename.setText(path.name)
             self.filename.setToolTip(str(path))
             self.layers.blockSignals(True)
@@ -276,11 +332,12 @@ class LayerMosaicWindow(QMainWindow):
     def _invalidate_detection(self, *_):
         if self.document is None:
             return
-        preview_pending = self.render_timer.isActive()
+        if self.manual_mask or self.editing:
+            self.status.setText("編集中のマスクを保持しています。検出設定は再解析時に反映します。")
+            return
         self.render_timer.stop()
         self.mask = self.analysis = self.result = None
-        if preview_pending:
-            self.render_timer.start(150)
+        self._request_display()
         self.status.setText("検出設定を変更しました。再解析してください。")
         self.refresh_preview()
         self._controls()
@@ -288,19 +345,30 @@ class LayerMosaicWindow(QMainWindow):
     def _layer_changed(self, item, column):
         if column == 2:
             self._invalidate_detection()
-        elif column in (1, 3):
+        elif column == 1:
             self._schedule_render()
+        elif column == 3:
+            self.dirty = True
+            self.embedding = None
+            self._request_display()
 
     def _schedule_render(self, *_):
         self.result = None
         if self.document is not None:
             self.dirty = True
-            self.status.setText("処理結果を更新しています…")
-            self.render_timer.start(150)
+            if not self.editing:
+                self.status.setText("処理結果を更新しています…")
+                self.render_timer.start(150)
         self._controls()
 
     def analyze(self):
         if self.busy or self.document is None:
+            return
+        if self.manual_mask and QMessageBox.question(
+            self, "再解析", "手動で編集したマスクを破棄して再解析しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
             return
         try:
             settings = self.settings()
@@ -313,13 +381,15 @@ class LayerMosaicWindow(QMainWindow):
         self.render_timer.stop()
         self.result = None
         self.mask = self.analysis = None
+        self.editing = self.manual_mask = False
+        self.undo_history.clear()
+        self.embedding = None
         processing = self.selected(1)
-        visible = self.selected(3)
         document = self.document
 
         def work():
             analysis = self.pipeline.analyze_image(document.detection_image(detection), settings, source_path=document.source)
-            return analysis, document.render(analysis.mask, processing, settings, visible)
+            return analysis, document.prepare(analysis.mask, processing, settings)
 
         def complete(value):
             self.analysis, result = value
@@ -332,44 +402,153 @@ class LayerMosaicWindow(QMainWindow):
     def render(self):
         if self.busy or self.document is None:
             return
-        visible = self.selected(3)
         if self.mask is None:
-            self._submit("表示を更新しています…", lambda: self.document.composite_image(visible), self._previewed)
+            self._request_display()
             return
-        settings, indices, mask = self.settings(), self.selected(1), self.mask.copy()
-        self._submit("処理結果を更新しています…", lambda: self.document.render(mask, indices, settings, visible), self._rendered)
-
-    def _previewed(self, original):
-        self.original = original
-        self.status.setText("表示を更新しました。保存するには再解析してください。")
-        self.refresh_preview()
+        settings, indices, mask = self.settings(False), self.selected(1), self.mask.copy()
+        self._submit("処理結果を更新しています…", lambda: self.document.prepare(mask, indices, settings), self._rendered)
 
     def _rendered(self, result):
         self.result = result
-        self.original = result.original_bgra
         self.dirty = True
         count = len(self.analysis.detections) if self.analysis is not None else 0
         self.status.setText(f"検出 {count}件 / 加工対象 {len(self.selected(1))}レイヤー — 処理結果を確認して保存できます")
-        self.refresh_preview()
+        self._request_display()
+
+    def _request_display(self):
+        self.preview_generation += 1
+        if self.document is None or self.preview_busy:
+            return
+        generation = self.preview_generation
+        visible, result, document = self.selected(3), self.result, self.document
+        self.preview_busy = True
+        self._controls()
+        def work():
+            if result is not None:
+                return result.images(visible)
+            return document.display.image(visible), None
+        def complete(images):
+            self.preview_busy = False
+            if generation != self.preview_generation or result is not self.result:
+                self._request_display()
+                return
+            self.original = images[0]
+            if result is not None:
+                result.original_bgra, result.bgra = images
+            self.refresh_preview()
+        future = self.executor.submit(work)
+        future.add_done_callback(lambda done: self.events.put((done, complete, False)))
 
     def refresh_preview(self, *_):
         if self.original is None:
             return
         image = on_white(self.original)
-        if self.view.currentText() == "処理結果" and self.result is not None:
+        if self.view.currentText() == "処理結果" and self.result is not None and self.result.bgra is not None:
             image = on_white(self.result.bgra)
-        elif self.view.currentText() == "検出範囲" and self.analysis is not None:
-            image = visualize_detection(image, self.analysis.mask, self.analysis.detections)
+        elif self.view.currentText() in {"検出範囲", "マスク範囲"} and self.mask is not None:
+            mask = cv2.resize(self.mask.astype(np.uint8), (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST).astype(bool)
+            detections = [] if self.analysis is None else self.analysis.detections
+            # Display caches may be smaller than the full-resolution editing mask.
+            sx, sy = image.shape[1] / self.document.width, image.shape[0] / self.document.height
+            detections = [replace(detection, box=tuple(round(v * (sx if i % 2 == 0 else sy))
+                                                       for i, v in enumerate(detection.box))) for detection in detections]
+            image = visualize_detection(image, mask, detections,
+                                        show_detection_annotations=self.view.currentText() == "検出範囲" and not self.editing)
         rgb = np.ascontiguousarray(image[..., ::-1])
         height, width = rgb.shape[:2]
         qimage = QImage(rgb.data, width, height, width * 3, QImage.Format.Format_RGB888).copy()
-        self.preview.setPixmap(QPixmap.fromImage(qimage).scaled(
+        pixmap = QPixmap.fromImage(qimage).scaled(
             max(1, self.preview.width() - 20), max(1, self.preview.height() - 20),
-            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.preview.setPixmap(pixmap)
+        self.preview.set_image_rect(QRectF((self.preview.width() - pixmap.width()) / 2,
+                                          (self.preview.height() - pixmap.height()) / 2,
+                                          pixmap.width(), pixmap.height()))
+        self.preview.set_brush_diameter(self.brush_size.value() * pixmap.width() / self.document.width)
+        self._controls()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         QTimer.singleShot(0, self.refresh_preview)
+
+    def _toggle_edit(self):
+        if self.busy or self.preview_busy or self.document is None:
+            return
+        self.render_timer.stop()
+        self.editing = not self.editing
+        if self.editing:
+            if self.mask is None:
+                self.mask = np.zeros((self.document.height, self.document.width), bool)
+            self.view.setCurrentText("マスク範囲")
+            self.status.setText("マスクを編集できます。編集を終了すると処理結果を更新します。")
+        else:
+            self.view.setCurrentText("処理結果")
+            self._schedule_render()
+        self.refresh_preview()
+
+    def _mask_point(self, position):
+        rect = self.preview.image_rect
+        if rect.isEmpty() or not rect.contains(position) or self.mask is None:
+            return None
+        h, w = self.mask.shape
+        return (min(w - 1, max(0, int((position.x() - rect.left()) * w / rect.width()))),
+                min(h - 1, max(0, int((position.y() - rect.top()) * h / rect.height()))))
+
+    def _remember_mask(self, mask):
+        packed = np.packbits(mask).tobytes()
+        self.undo_history.append((mask.shape, packed))
+        while len(self.undo_history) > 20 or sum(len(entry[1]) for entry in self.undo_history) > 128 * 1024 * 1024:
+            self.undo_history.popleft()
+
+    def _mask_changed(self):
+        self.manual_mask = self.dirty = True
+        self.result = None
+        self.refresh_preview()
+
+    def _begin_stroke(self):
+        if self.preview.mask_editing and self.mask is not None:
+            self.stroke_before = self.mask.copy()
+
+    def _paint_stroke(self, start, end, erase):
+        if not self.preview.mask_editing or self.mask is None:
+            return
+        first, last = self._mask_point(start), self._mask_point(end)
+        if first is not None and last is not None:
+            if paint_mask_stroke(self.mask, first, last, self.brush_size.value(), erase):
+                self._mask_changed()
+
+    def _finish_stroke(self):
+        if self.stroke_before is not None and not np.array_equal(self.stroke_before, self.mask):
+            self._remember_mask(self.stroke_before)
+        self.stroke_before = None
+        self._controls()
+
+    def _undo_mask(self):
+        if not self.editing or self.busy or self.stroke_before is not None or not self.undo_history:
+            return
+        shape, packed = self.undo_history.pop()
+        self.mask = np.unpackbits(np.frombuffer(packed, np.uint8), count=shape[0] * shape[1]).reshape(shape).astype(bool)
+        self._mask_changed()
+        self.status.setText("マスク編集を元に戻しました")
+
+    def _select_region(self, position, erase):
+        point = self._mask_point(position)
+        if not self.preview.mask_editing or point is None:
+            return
+        visible, document, embedding = self.selected(3), self.document, self.embedding
+        threshold = self.advanced_controls["mask_threshold"].value()
+        def work():
+            image = document.detection_image(visible)
+            return self.pipeline.select_mask_region(image, point, threshold, embedding)
+        def complete(value):
+            region, self.embedding = value
+            candidate = self.mask & ~region if erase else self.mask | region
+            if not np.array_equal(candidate, self.mask):
+                self._remember_mask(self.mask)
+                self.mask = candidate
+                self._mask_changed()
+            self.status.setText("領域を削除しました" if erase else "領域を追加しました")
+        self._submit("クリック位置の領域を選択しています…", work, complete)
 
     def choose_save(self, layered):
         if self.result is None or self.busy:
@@ -385,18 +564,19 @@ class LayerMosaicWindow(QMainWindow):
             self.save_to(output)
 
     def save_to(self, path):
-        if self.result is None or self.busy or self.render_timer.isActive():
+        if self.result is None or self.busy or self.preview_busy or self.editing or self.render_timer.isActive():
             return
-        result = self.result
+        mask, indices, visible, settings = self.mask.copy(), self.selected(1), self.selected(3), self.settings(False)
+        document = self.document
 
         def complete(_):
             self.dirty = False
             self.status.setText(f"保存しました: {path}")
 
-        self._submit("保存しています…", lambda: result.save(path), complete)
+        self._submit("保存しています…", lambda: document.render(mask, indices, settings, visible).save(path), complete)
 
     def closeEvent(self, event):
-        if self.busy:
+        if self.busy or self.preview_busy:
             self.status.setText("処理完了後に閉じてください。")
             event.ignore()
             return

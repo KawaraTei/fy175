@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -18,6 +19,51 @@ SETTINGS = ProcessingSettings(ImageMode.ILLUSTRATION, frozenset({"penis", "vagin
 
 
 class LayerTests(unittest.TestCase):
+    def test_cached_display_does_not_read_write_or_reprocess(self):
+        for extension in (".psd", ".clip"):
+            with self.subTest(extension=extension), TemporaryDirectory() as temporary:
+                source = Path(temporary) / ("cached" + extension)
+                make_layers(source)
+                document = LayerDocument(source)
+                try:
+                    mask = np.ones((96, 128), bool)
+                    prepared = document.prepare(mask, frozenset({1}), SETTINGS)
+                    selections = (frozenset({0}), frozenset({1}), frozenset(), frozenset({0, 1}))
+                    expected = {visible: document.render(mask, frozenset({1}), SETTINGS, visible).bgra
+                                for visible in selections}
+                    before = {p.name: p.stat().st_mtime_ns for p in document.root.iterdir()}
+                    with patch.object(document, "_read", side_effect=AssertionError("display read")), patch(
+                        "auto_mosaic.layers.effect_pixels", side_effect=AssertionError("display processing")
+                    ), patch.object(document, "render", side_effect=AssertionError("display export")):
+                        for visible in selections * 2:
+                            original, processed = prepared.images(visible)
+                            # Qt's integer alpha rounding may differ by one from native CLIP composition.
+                            self.assertLessEqual(np.abs(processed.astype(int) - expected[visible]).max(), 1)
+                    self.assertEqual(before, {p.name: p.stat().st_mtime_ns for p in document.root.iterdir()})
+                finally:
+                    document.close()
+
+    def test_clip_preview_retains_blend_opacity_and_clipping(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "blend.clip"
+            make_layers(source)
+            reader = clipparse.ClipFile()
+            reader.load(str(source))
+            writer = clipparse.ClipWriter()
+            writer.load(str(source))
+            writer.set_layer_attr(reader.layers[1].main_id, opacity=128, composite=2, clipping=1)
+            changed = root / "changed.clip"
+            writer.save(str(changed))
+            del reader, writer
+            document = LayerDocument(changed)
+            try:
+                visible = frozenset({0, 1})
+                actual = document.display.image(visible)
+                self.assertLessEqual(np.abs(actual.astype(int) - document.original).max(), 1)
+            finally:
+                document.close()
+
     def test_visibility_preserves_hidden_pixels_and_detection_selection(self):
         for extension in (".psd", ".clip"):
             with self.subTest(extension=extension), TemporaryDirectory() as temporary:

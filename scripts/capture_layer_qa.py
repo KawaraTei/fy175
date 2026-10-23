@@ -4,11 +4,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from pathlib import Path
 import json
+import time
+import numpy as np
 from unittest.mock import patch
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtTest import QTest
 
 from auto_mosaic.layer_ui import LayerMosaicWindow
 from auto_mosaic.layers import on_white
@@ -49,6 +52,14 @@ def main():
             window.grab().save(str(root / f"{extension[1:]}-hidden.png"))
             window.layers.topLevelItem(0).setCheckState(3, Qt.CheckState.Checked)
             wait_idle(app, window)
+            window.edit_button.click()
+            rect = window.preview.image_rect
+            point = (rect.topLeft() + QPointF(rect.width() * .18, rect.height() * .18)).toPoint()
+            QTest.mouseClick(window.preview, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+            app.processEvents()
+            window.grab().save(str(root / f"{extension[1:]}-mask-edit.png"))
+            window.edit_button.click()
+            wait_idle(app, window)
             window.resize(1260, 790)
             window.view.setCurrentText("元画像")
             app.processEvents()
@@ -66,8 +77,12 @@ def main():
             wait_idle(app, window)
             report[extension] = {"source": str(source), "saved": str(target), "layers": len(window.document.layers)}
             if extension == ".psd":
-                actual = MosaicPipeline(Path("models")).analyze_image(on_white(window.original), SETTINGS, source_path=source)
+                real_pipeline = MosaicPipeline(Path("models"))
+                actual = real_pipeline.analyze_image(on_white(window.original), SETTINGS, source_path=source)
                 report["real_model"] = {"detections": len(actual.detections), "shape": list(actual.mask.shape)}
+                region, _ = real_pipeline.select_mask_region(actual.image_bgr, (320, 240), SETTINGS.mask_threshold)
+                report["real_model"]["point_region_pixels"] = int(region.sum())
+                assert region.shape == actual.mask.shape
             window.close()
             app.processEvents()
     main_window = AutoMosaicWindow()
@@ -79,6 +94,29 @@ def main():
         main_window._render_preview()
         main_window.grab().save(str(root / f"image-entry-{name}.png"))
     main_window.close()
+    # A focused large-image comparison against the old display path (native export).
+    from auto_mosaic.layers import LayerDocument
+    for extension in (".psd", ".clip"):
+        source = root / ("latency" + extension)
+        make_layers(source, 2048, 1536)
+        document = LayerDocument(source)
+        try:
+            mask = np.zeros((1536, 2048), bool)
+            mask[384:1152, 512:1536] = True
+            prepared = document.prepare(mask, frozenset({1}), SETTINGS)
+            visible = frozenset({0})
+            start = time.perf_counter()
+            document.render(mask, frozenset({1}), SETTINGS, visible)
+            old = time.perf_counter() - start
+            start = time.perf_counter()
+            prepared.images(visible)
+            cold = time.perf_counter() - start
+            start = time.perf_counter()
+            prepared.images(visible)
+            warm = time.perf_counter() - start
+            report[extension]["display_seconds"] = {"old_export": old, "first_cached_composite": cold, "repeat": warm}
+        finally:
+            document.close()
     (root / "qa.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("LAYER_QA_OK", root)
 

@@ -103,8 +103,18 @@ class LayerDocument:
             raise ValueError("レイヤー加工は8bit RGBのPSDに対応しています。RGB・8bitへ変換してください。")
         self.layers = self._layer_infos(reader)
         self.original = self._composite(reader)
+        from auto_mosaic.layer_preview import ClipDisplay, PsdDisplay
+        self.display = (PsdDisplay(self, self._memory_psd()) if self.extension == ".psd"
+                        else ClipDisplay(self, reader))
+
+    def _memory_psd(self):
+        reader = psdparse.PSDFile()
+        if not reader.load_bytes(self.snapshot.read_bytes()):
+            raise ValueError("PSDの表示データを読み込めません。")
+        return reader
 
     def close(self):
+        self.display = None
         self._temporary.cleanup()
 
     def _read(self, path):
@@ -187,6 +197,37 @@ class LayerDocument:
         if not indices <= {info.index for info in self.layers}:
             raise ValueError("存在しないレイヤーが選択されています。")
 
+    def _edited_pixels(self, reader, mask, indices, settings):
+        self._validate_indices(indices)
+        if mask.shape != (self.height, self.width):
+            raise ValueError("マスクのサイズがキャンバスと一致しません。")
+        if any(not info.editable and info.index in indices for info in self.layers):
+            raise ValueError("加工対象にはラスターレイヤーを選んでください。")
+        for index in sorted(indices):
+            layer = reader.layers[index]
+            pixels = np.frombuffer(reader.layer_image(index, "image"), np.uint8).reshape(layer.height, layer.width, 4)
+            local_mask = np.zeros((layer.height, layer.width), dtype=bool)
+            x1, y1 = max(0, layer.left), max(0, layer.top)
+            x2, y2 = min(self.width, layer.right), min(self.height, layer.bottom)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            local_mask[y1-layer.top:y2-layer.top, x1-layer.left:x2-layer.left] = mask[y1:y2, x1:x2]
+            if local_mask.any():
+                yield index, effect_pixels(pixels, local_mask, settings)
+
+    def prepare(self, mask, indices, settings):
+        """Prepare edited display pixels without writing a PSD/CLIP document."""
+        from auto_mosaic.layer_preview import PreparedLayers, PsdDisplay
+        reader = self._memory_psd() if self.extension == ".psd" else self._read(self.snapshot)
+        changes = self._edited_pixels(reader, mask, indices, settings)
+        if self.extension == ".psd":
+            for index, pixels in changes:
+                reader.set_layer_pixels(index, pixels.tobytes(), pixels.shape[1], pixels.shape[0])
+            processed = PsdDisplay(self, reader)
+        else:
+            processed = self.display.with_pixels(changes)
+        return PreparedLayers(self.display, processed)
+
     def render(self, mask: np.ndarray, indices: frozenset[int], settings: ProcessingSettings,
                visible_indices: frozenset[int] | None = None) -> LayerRender:
         self._validate_indices(indices)
@@ -202,18 +243,8 @@ class LayerDocument:
         if visible_indices is not None:
             self._set_visibility(reader, writer, visible_indices)
             original = self.composite_image(visible_indices)
-        for index in sorted(indices):
+        for index, edited in self._edited_pixels(reader, mask, indices, settings):
             layer = reader.layers[index]
-            pixels = np.frombuffer(reader.layer_image(index, "image"), np.uint8).reshape(layer.height, layer.width, 4)
-            local_mask = np.zeros((layer.height, layer.width), dtype=bool)
-            x1, y1 = max(0, layer.left), max(0, layer.top)
-            x2, y2 = min(self.width, layer.right), min(self.height, layer.bottom)
-            if x2 <= x1 or y2 <= y1:
-                continue
-            local_mask[y1-layer.top:y2-layer.top, x1-layer.left:x2-layer.left] = mask[y1:y2, x1:x2]
-            if not local_mask.any():
-                continue
-            edited = effect_pixels(pixels, local_mask, settings)
             if self.extension == ".psd":
                 writer.set_layer_pixels(index, edited.tobytes(), layer.width, layer.height)
             else:

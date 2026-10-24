@@ -636,7 +636,7 @@ class AgentController:
                 self.preview_events.put((key, result, None))
             except Exception as error:
                 self.preview_events.put((key, None, error))
-        threading.Thread(target=work, name="agent-preview", daemon=True).start()
+        self.window._worker.submit(work)
         return None, job
 
     def image_response(self, path, params, raw_path):

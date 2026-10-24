@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import queue
 import sys
-import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import cv2
 import numpy as np
@@ -246,6 +247,11 @@ class AutoMosaicWindow(QMainWindow):
         self.app_root = application_root()
         self.model_dir = resource_root() / "models"
         self.pipeline = MosaicPipeline(self.model_dir)
+        # CUDA retains native resources for calling threads. Reuse one worker
+        # across images, saves and point selection instead of creating a thread
+        # for every operation (which grows process memory on repeated inference).
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-worker")
+        self._closing = Event()
         self.image_paths: list[Path] = []
         self.manual_review_paths: list[Path] = []
         self.current_result: ProcessingResult | None = None
@@ -1097,7 +1103,7 @@ class AutoMosaicWindow(QMainWindow):
             except Exception as error:
                 self.events.put(("analysis_error", (generation, error, report_errors or restore_saved)))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _filename_suffix(self) -> str:
         suffix = self.suffix_edit.text()
@@ -1155,7 +1161,7 @@ class AutoMosaicWindow(QMainWindow):
             except Exception as error:
                 self.events.put(("error", error))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _restore_mask_settings(self, sidecar_file: Path | None = None) -> None:
         if self.busy:
@@ -1182,7 +1188,7 @@ class AutoMosaicWindow(QMainWindow):
             except Exception as error:
                 self.events.put(("restore_error", (generation, error)))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _copy_current(self) -> None:
         if self.busy:
@@ -1201,7 +1207,7 @@ class AutoMosaicWindow(QMainWindow):
             except Exception as error:
                 self.events.put(("error", error))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _save_current(self, output_path: Path | None = None) -> None:
         if self.busy:
@@ -1272,7 +1278,7 @@ class AutoMosaicWindow(QMainWindow):
             except Exception as error:
                 self.events.put(("error", error))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _process_all(self) -> None:
         if self.mask_edit_active:
@@ -1303,6 +1309,8 @@ class AutoMosaicWindow(QMainWindow):
             mask_sources: list[str] = []
             try:
                 for index, path in enumerate(paths, start=1):
+                    if self._closing.is_set():
+                        return
                     self.events.put(("progress", (index - 1, len(paths), path.name)))
                     result = self.pipeline.prepare(path, settings)
                     outputs.append(self.pipeline.save(result, output_dir, filename_suffix))
@@ -1313,13 +1321,16 @@ class AutoMosaicWindow(QMainWindow):
                             raise OSError(f"画像は保存済みです: {outputs[-1]}\n.fyの保存に失敗しました: {error}") from error
                     completed_paths.append(path)
                     mask_sources.append("restored" if result.restored_from_sidecar else "reanalyzed")
+                    # Do not keep the previous full-resolution result alive
+                    # while preparing the next image.
+                    del result
                 self.events.put(("complete", (outputs, completed_paths, remove_after, mask_sources)))
             except Exception as error:
                 self.events.put(
                     ("batch_error", (error, completed_paths, remove_after))
                 )
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _choose_output(self) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -1431,7 +1442,7 @@ class AutoMosaicWindow(QMainWindow):
             except Exception as error:
                 self.events.put(("mask_region_error", (generation, draft, error)))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._worker.submit(work)
 
     def _paint_mask_stroke(
         self, start: QPointF, end: QPointF, erase: bool
@@ -1711,6 +1722,10 @@ class AutoMosaicWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if self._confirm_discard_mask_edit("アプリを終了", refresh_after=False):
+            self._closing.set()
+            self.analysis_generation += 1
+            self.poll_timer.stop()
+            self._worker.shutdown(wait=False, cancel_futures=True)
             super().closeEvent(event)
         else:
             event.ignore()

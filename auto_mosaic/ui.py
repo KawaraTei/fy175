@@ -59,6 +59,7 @@ from auto_mosaic.image_ops import (
 )
 from auto_mosaic.model_catalog import required_model_paths
 from auto_mosaic.pipeline import MosaicPipeline
+from auto_mosaic.mask_selection import mask_iou
 from auto_mosaic.sidecar import save_sidecar, sidecar_path
 from auto_mosaic.ui_style import APP_STYLE, section_label
 from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
@@ -264,6 +265,8 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_embedding: tuple[list[np.ndarray], tuple[int, int]] | None = None
         self.mask_undo_history = deque()
         self.edit_detection_masks: list[np.ndarray] | None = None
+        self._mask_candidates = {}
+        self._candidate_detections = []
         self._mask_stroke_active = False
         self._mask_stroke_recorded = False
         self.preview_image_rect = QRectF()
@@ -524,6 +527,19 @@ class AutoMosaicWindow(QMainWindow):
         advanced.addWidget(self.mask_hint)
         right_layout.addWidget(self.analyze_button)
         right_layout.addWidget(self.mask_edit_button)
+        self.mask_target_combo = QComboBox()
+        self.mask_target_combo.setAccessibleName("切り替える検出対象")
+        self.mask_target_combo.setToolTip("選んだ検出対象をプレビューの青い枠で表示します。")
+        self.mask_target_combo.hide()
+        self.mask_target_combo.currentIndexChanged.connect(self._on_mask_target_changed)
+        right_layout.addWidget(self.mask_target_combo)
+        self.next_mask_button = self._button("次のマスク候補", self._next_detection_mask)
+        self.next_mask_button.setEnabled(False)
+        self.next_mask_button.setToolTip(
+            "選んだ検出対象のマスクを別の領域へ切り替えます。\n"
+            "繰り返し押すと元の候補に戻ります。Ctrl+Zで取り消せます。"
+        )
+        right_layout.addWidget(self.next_mask_button)
         brush_row = QHBoxLayout()
         for widget in (
             self.brush_size_label,
@@ -905,6 +921,26 @@ class AutoMosaicWindow(QMainWindow):
         self.mask_edit_button.setEnabled(
             not self.busy and (self.mask_edit_active or can_start)
         )
+        detections = (self.current_result.detections if self.current_result is not None
+                      and self.current_result.source_path == path else [])
+        if detections != self._candidate_detections:
+            self._candidate_detections = list(detections)
+            self.mask_target_combo.blockSignals(True)
+            self.mask_target_combo.clear()
+            self.mask_target_combo.addItems([
+                f"対象 {index + 1}: {item.class_name}"
+                for index, item in enumerate(detections)
+            ])
+            self.mask_target_combo.blockSignals(False)
+        self.mask_target_combo.setVisible(len(detections) > 1)
+        self.mask_target_combo.setEnabled(not self.busy and not self._mask_stroke_active)
+        owned = self.edit_detection_masks if self.mask_edit_active else (
+            self.current_result.detection_masks if can_start else []
+        )
+        self.next_mask_button.setEnabled(
+            can_start and not self._mask_stroke_active and bool(detections)
+            and owned is not None and len(owned) == len(detections)
+        )
         for widget in (
             self.brush_size_label,
             self.brush_size_slider,
@@ -937,6 +973,7 @@ class AutoMosaicWindow(QMainWindow):
 
     def _reset_mask_history(self) -> None:
         self.mask_undo_history.clear()
+        self._mask_candidates.clear()
         self.edit_detection_masks = None
         self._mask_stroke_active = False
         self._mask_stroke_recorded = False
@@ -1383,15 +1420,20 @@ class AutoMosaicWindow(QMainWindow):
                 if self.mask_edit_active and self.edited_mask is not None
                 else self.current_result.mask
             )
-            self._set_preview_bgr(
-                visualize_detection(
-                    original,
-                    mask,
-                    self.current_result.detections,
-                    self.current_result.below_threshold_detections,
-                    show_detection_annotations=not self.mask_edit_active and mode == "検出範囲",
-                )
+            preview = visualize_detection(
+                original,
+                mask,
+                self.current_result.detections,
+                self.current_result.below_threshold_detections,
+                show_detection_annotations=not self.mask_edit_active and mode == "検出範囲",
             )
+            index = self.mask_target_combo.currentIndex()
+            if len(self.current_result.detections) > 1 and 0 <= index < len(self.current_result.detections):
+                x1, y1, x2, y2 = self.current_result.detections[index].box
+                cv2.rectangle(preview, (x1, y1), (x2, y2), (255, 180, 40), 2)
+                cv2.putText(preview, f"#{index + 1}", (x1, max(20, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 180, 40), 2, cv2.LINE_AA)
+            self._set_preview_bgr(preview)
         elif self.mask_edit_active and self.edited_mask is not None:
             original = (
                 self.mask_edit_original_bgr
@@ -1413,6 +1455,72 @@ class AutoMosaicWindow(QMainWindow):
             )
         else:
             self._set_preview_bgr(self.current_result.image_bgr)
+
+    def _on_mask_target_changed(self, _index):
+        if self.current_result is not None:
+            self.set_preview_mode("マスク範囲")
+            self._refresh_preview()
+
+    def _next_detection_mask(self):
+        if not self.next_mask_button.isEnabled():
+            return
+        try:
+            settings = self._settings()
+        except ValueError as error:
+            self.status_label.setText(str(error))
+            return
+        index = self.mask_target_combo.currentIndex()
+        if not self.mask_edit_active:
+            self._toggle_mask_edit()
+        if not self.mask_edit_active or index < 0:
+            return
+        self.set_preview_mode("マスク範囲")
+        key = (index, settings.mask_threshold, settings.mask_expansion, settings.mask_smoothing)
+        if key in self._mask_candidates:
+            candidates = [
+                np.unpackbits(mask, count=self.edited_mask.size).reshape(self.edited_mask.shape).astype(bool)
+                for mask in self._mask_candidates[key]
+            ]
+            self._apply_next_detection_mask(index, candidates)
+            return
+        image, embedding = self.mask_edit_original_bgr, self.mask_edit_embedding
+        original = self.edit_detection_masks[index].copy()
+        box = self.current_result.detections[index].box
+        draft, generation = self.edited_mask, self.analysis_generation
+        self._set_busy(True, "別のマスク候補を探しています…")
+
+        def work():
+            try:
+                candidates, encoded = self.pipeline.detection_mask_alternatives(
+                    image, box, original, settings, embedding,
+                )
+                self.events.put(("mask_candidates", (generation, draft, key, candidates, encoded)))
+            except Exception as error:
+                self.events.put(("mask_region_error", (generation, draft, error)))
+
+        self._worker.submit(work)
+
+    def _apply_next_detection_mask(self, index, candidates):
+        if len(candidates) < 2:
+            self.status_label.setText("別のマスク候補が見つかりません。Shift+クリックで領域を指定できます。")
+            return
+        owned = list(self.edit_detection_masks)
+        current = owned[index]
+        # Infer the cursor from the actual mask, so Ctrl+Z also restores cycling.
+        match = max(range(len(candidates)), key=lambda i: mask_iou(current, candidates[i]))
+        next_index = (match + 1) % len(candidates)
+        replacement = candidates[next_index]
+        combined = self.edited_mask & ~current
+        owned[index] = replacement
+        for mask in owned:
+            combined |= mask
+        try:
+            self._apply_mask_edit(combined, owned)
+            self.status_label.setText(
+                f"対象 {index + 1}: マスク候補 {next_index + 1}/{len(candidates)}（Ctrl+Zで戻す）"
+            )
+        except ValueError as error:
+            self.status_label.setText(str(error))
 
     def _select_mask_region(self, position: QPointF, erase: bool) -> None:
         if (
@@ -1584,7 +1692,21 @@ class AutoMosaicWindow(QMainWindow):
         try:
             while True:
                 kind, payload = self.events.get_nowait()
-                if kind == "mask_region":
+                if kind == "mask_candidates":
+                    generation, draft, key, candidates, embedding = payload
+                    if generation != self.analysis_generation:
+                        continue
+                    self._set_busy(False, "マスク候補を取得しました")
+                    if draft is not self.edited_mask:
+                        continue
+                    self.mask_edit_embedding = embedding
+                    self._mask_candidates[key] = [np.packbits(mask) for mask in candidates]
+                    # Keep per-target cycles without retaining full-resolution boolean arrays.
+                    while sum(mask.nbytes for masks in self._mask_candidates.values()
+                              for mask in masks) > 128 * 1024 * 1024:
+                        del self._mask_candidates[next(iter(self._mask_candidates))]
+                    self._apply_next_detection_mask(key[0], candidates)
+                elif kind == "mask_region":
                     generation, draft, erase, region, embedding = payload
                     if generation != self.analysis_generation:
                         continue

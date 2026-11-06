@@ -73,6 +73,21 @@ class Sam2OnnxSegmenter:
         point_labels = np.array([[1, -1]], dtype=np.float32)
         return self._mask_candidates(embedding, point_coords, point_labels, mask_threshold)
 
+    def mask_candidates_from_box_points(
+        self, embedding, box, mask_threshold, positive=None, negative=None,
+    ) -> list[tuple[np.ndarray, float]]:
+        """Alternative box prompts, without forcing the box center positive."""
+        x1, y1, x2, y2 = box
+        points, labels = [(x1, y1), (x2, y2)], [2, 3]
+        for point, label in ((positive, 1), (negative, 0)):
+            if point is not None:
+                points.append(point)
+                labels.append(label)
+        return self._mask_candidates(
+            embedding, np.array([points], dtype=np.float32),
+            np.array([labels], dtype=np.float32), mask_threshold,
+        )
+
     def _mask_candidates(
         self, embedding, point_coords, point_labels, mask_threshold
     ) -> list[tuple[np.ndarray, float]]:

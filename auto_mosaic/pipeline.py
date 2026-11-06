@@ -21,7 +21,9 @@ from auto_mosaic.model_catalog import (
 )
 from auto_mosaic.segmenter import Sam2OnnxSegmenter
 from auto_mosaic.sidecar import load_sidecar
-from auto_mosaic.mask_selection import select_detection_mask
+from auto_mosaic.mask_selection import (
+    alternative_prompt_points, rank_alternative_masks, select_detection_mask,
+)
 
 
 BELOW_THRESHOLD_PREVIEW_LIMIT = 5
@@ -125,6 +127,24 @@ class MosaicPipeline:
             mask = max(containing, key=lambda item: item[1])[0]
             _, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
             return labels == labels[y, x], embedding
+
+    def detection_mask_alternatives(self, image, box, original, settings, embedding=None):
+        """On-demand alternatives; keep normal automatic detection unchanged."""
+        with self._lock:
+            segmenter = self._get_segmenter()
+            if embedding is None:
+                embedding = segmenter.encode(image)
+            candidates = segmenter.mask_candidates_from_box_points(
+                embedding, box, settings.mask_threshold,
+            )
+            points, negative = alternative_prompt_points(original, box)
+            for point in points:
+                candidates.extend(segmenter.mask_candidates_from_box_points(
+                    embedding, box, settings.mask_threshold, point, negative,
+                ))
+            return rank_alternative_masks(
+                candidates, original, box, settings.mask_expansion, settings.mask_smoothing,
+            ), embedding
 
     def save(
         self,

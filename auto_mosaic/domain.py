@@ -18,6 +18,7 @@ class EffectType(str, Enum):
 
 
 PREVIEW_VIEWS = {"original": "元画像", "detection": "検出範囲", "mask_overlay": "マスク範囲", "result": "処理結果"}
+TARGET_LABELS = {"penis": "penis", "vagina": "vagina / pussy"}
 
 # Shared limits for UI controls, API discovery, and saved processing settings.
 PROCESSING_RANGES = {

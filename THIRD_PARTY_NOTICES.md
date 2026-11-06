@@ -16,6 +16,8 @@ their own licenses; the application license does not replace them.
 | ONNX Runtime | 1.28.0 | MIT; bundled third-party components have their own terms | `LICENSES/ONNX-Runtime-1.28.0.txt`, `LICENSES/ONNX-Runtime-ThirdPartyNotices-1.28.0.txt` |
 | OpenCV / opencv-python-headless | 4.12.0.88 | Apache-2.0; bundled third-party components have their own terms | `LICENSES/OpenCV-4.12.0.txt`, `LICENSES/OpenCV-ThirdParty-4.12.0.txt` |
 | Pillow | 11.3.0 | HPND and bundled component licenses | `LICENSES/Pillow-11.3.0.txt` |
+| psdparse | 0.13.0 | MIT | `LICENSES/psdparse-0.13.0.txt` |
+| clipparse | 0.2.0 | MIT | `LICENSES/clipparse-0.2.0.txt` |
 | PySide6 Essentials | 6.11.1 | LGPL-3.0-only (the open-source option selected here) | `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` |
 | shiboken6 | 6.11.1 | LGPL-3.0-only (the open-source option selected here) | `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` |
 | PyInstaller | 6.15.0 | GPL-2.0-or-later with the PyInstaller bootloader exception | `LICENSES/PyInstaller-6.15.0.txt` |

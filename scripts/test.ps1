@@ -8,6 +8,8 @@ if (-not (Test-Path '.venv\Scripts\python.exe')) {
 
 & '.venv\Scripts\python.exe' -m compileall -q auto_mosaic scripts tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& '.venv\Scripts\python.exe' -m unittest tests.test_layers tests.test_layer_ui -v
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & '.venv\Scripts\python.exe' -m unittest tests.test_inference -v
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & '.venv\Scripts\python.exe' -m unittest tests.test_png_metadata -v

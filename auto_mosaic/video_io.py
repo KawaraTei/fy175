@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -29,15 +30,35 @@ def check_cancel(cancel: Event) -> None:
 
 
 def tool_path(name: str) -> Path:
-    """Packaged tools are authoritative; source runs use the shared installation."""
+    """Bundle first; Windows uses the shared tools, macOS source uses PATH/Homebrew."""
+    if name not in {"ffmpeg", "ffprobe"}:
+        raise ValueError(f"Unsupported media tool: {name}")
+    executable = name + (".exe" if sys.platform == "win32" else "")
     if getattr(sys, "frozen", False):
         directory = Path(getattr(sys, "_MEIPASS")) / "ffmpeg"
-    else:
+        if sys.platform == "darwin" and not directory.exists():
+            return _external_tool(executable)
+    elif sys.platform == "win32":
         directory = SHARED_FFMPEG_DIR
-    path = directory / f"{name}.exe"
+    else:
+        return _external_tool(executable)
+    path = directory / executable
     if not path.is_file():
-        raise FileNotFoundError(f"{name}.exe がありません: {directory}")
+        raise FileNotFoundError(f"{executable} がありません: {directory}")
     return path
+
+
+def _external_tool(executable: str) -> Path:
+    located = shutil.which(executable)
+    if located:
+        return Path(located).resolve()
+    if sys.platform == "darwin":
+        # Finder does not inherit the user's interactive shell PATH.
+        for directory in (Path("/opt/homebrew/bin"), Path("/usr/local/bin")):
+            candidate = directory / executable
+            if candidate.is_file() and candidate.stat().st_mode & 0o111:
+                return candidate.resolve()
+    raise FileNotFoundError(f"{executable} がありません。macOSでは brew install ffmpeg を実行してください。")
 
 
 @contextmanager

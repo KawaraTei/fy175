@@ -1,0 +1,165 @@
+import os
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+import numpy as np
+from PySide6.QtCore import Qt, QPointF
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+from auto_mosaic.domain import Detection, ProcessingResult
+from auto_mosaic.layer_ui import LayerMosaicWindow
+from tests.layer_fixtures import make_layers, move_clip_layer
+from tests.test_layers import SETTINGS
+
+
+def wait_idle(app, window):
+    deadline = time.monotonic() + 20
+    while window.busy or window.preview_busy or window.render_timer.isActive():
+        app.processEvents()
+        if time.monotonic() > deadline:
+            raise AssertionError(window.status.text())
+        time.sleep(.01)
+    app.processEvents()
+
+
+def synthetic_analysis(image, settings, *, source_path):
+    height, width = image.shape[:2]
+    mask = np.zeros((height, width), bool)
+    mask[height//4:height*3//4, width//4:width*3//4] = True
+    return ProcessingResult(source_path, image, mask,
+                            [Detection("penis", .9, (width//4, height//4, width*3//4, height*3//4))])
+
+
+class LayerUiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_checks_invalidate_then_save_current_result(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "art.psd"
+            background, _ = make_layers(path)
+            window = LayerMosaicWindow(Path("models"), SETTINGS)
+            window.pipeline.analyze_image = Mock(side_effect=synthetic_analysis)
+            window.show()
+            with patch.object(QMessageBox, "warning") as warnings:
+                window.load_path(path)
+                wait_idle(self.app, window)
+                self.assertFalse(warnings.called)
+                self.assertIsNotNone(window.result)
+                self.assertTrue(window.flatten_button.isEnabled())
+                foreground = window.layers.topLevelItem(0)
+                foreground.setCheckState(3, Qt.CheckState.Unchecked)
+                self.assertFalse(window.flatten_button.isEnabled())
+                self.assertEqual(foreground.checkState(1), Qt.CheckState.Checked)
+                self.assertEqual(foreground.checkState(2), Qt.CheckState.Checked)
+                wait_idle(self.app, window)
+                self.assertEqual(window.pipeline.analyze_image.call_count, 1)
+                np.testing.assert_array_equal(window.result.bgra, background)
+                np.testing.assert_array_equal(window.original, background)
+                foreground.setCheckState(3, Qt.CheckState.Checked)
+                wait_idle(self.app, window)
+                self.assertTrue(np.any(window.result.bgra != background))
+                window.layers.topLevelItem(0).setCheckState(1, Qt.CheckState.Unchecked)
+                self.assertFalse(window.flatten_button.isEnabled())
+                wait_idle(self.app, window)
+                self.assertEqual(window.pipeline.analyze_image.call_count, 1)
+                # A detection edit must not cancel an accepted, pending visibility update.
+                foreground.setCheckState(3, Qt.CheckState.Unchecked)
+                window.layers.topLevelItem(0).setCheckState(2, Qt.CheckState.Unchecked)
+                self.assertIsNone(window.result)
+                self.assertFalse(window.flatten_button.isEnabled())
+                wait_idle(self.app, window)
+                np.testing.assert_array_equal(window.original, background)
+                self.assertIsNone(window.result)
+                self.assertFalse(window.flatten_button.isEnabled())
+                window.analyze_button.click()
+                wait_idle(self.app, window)
+                window.save_to(root / "saved.png")
+                wait_idle(self.app, window)
+                self.assertTrue((root / "saved.png").exists())
+                self.assertFalse(window.dirty)
+                self.assertFalse(warnings.called)
+            window.close()
+            self.app.processEvents()
+
+    def test_manual_mask_brush_region_undo_visibility_and_export(self):
+        for extension in (".psd", ".clip"):
+            with self.subTest(extension=extension), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / ("manual" + extension)
+                _, top = make_layers(source)
+                if extension == ".clip":
+                    move_clip_layer(source, 20, -12)
+                window = LayerMosaicWindow(Path("models"), SETTINGS)
+                window.pipeline.analyze_image = Mock(side_effect=synthetic_analysis)
+                window.show()
+                with patch.object(QMessageBox, "warning") as warnings:
+                    window.load_path(source)
+                    wait_idle(self.app, window)
+                    window.edit_button.click()
+                    baseline = window.mask.copy()
+                    rect = window.preview.image_rect
+                    point = (rect.topLeft() + QPointF(rect.width() * .18, rect.height() * .18)).toPoint()
+                    QTest.mouseClick(window.preview, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+                    self.assertGreater(window.mask.sum(), baseline.sum())
+                    painted = window.mask.copy()
+                    self.assertTrue(window.undo_button.isEnabled())
+                    self.assertIsNone(window.result)
+                    self.assertFalse(window.render_timer.isActive())
+                    QTest.mouseClick(window.preview, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier, point)
+                    self.assertLess(window.mask.sum(), painted.sum())
+                    window.undo_button.click()
+                    np.testing.assert_array_equal(window.mask, painted)
+                    region = np.zeros_like(window.mask)
+                    region[70:80, 80:90] = True
+                    window.pipeline.select_mask_region = Mock(return_value=(region, "cached embedding"))
+                    QTest.mouseClick(window.preview, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, point)
+                    wait_idle(self.app, window)
+                    np.testing.assert_array_equal(window.mask, painted | region)
+                    QTest.mouseClick(window.preview, Qt.MouseButton.LeftButton,
+                                     Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier, point)
+                    wait_idle(self.app, window)
+                    np.testing.assert_array_equal(window.mask, (painted | region) & ~region)
+                    window.undo_button.click()
+                    edited = window.mask.copy()
+                    with patch.object(window.document, "prepare", side_effect=AssertionError("visibility prepared pixels")), patch.object(
+                        window.document, "render", side_effect=AssertionError("visibility exported")
+                    ):
+                        foreground = window.layers.topLevelItem(0)
+                        foreground.setCheckState(3, Qt.CheckState.Unchecked)
+                        foreground.setCheckState(3, Qt.CheckState.Checked)
+                        wait_idle(self.app, window)
+                        np.testing.assert_array_equal(window.mask, edited)
+                    with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+                        window.analyze()
+                    np.testing.assert_array_equal(window.mask, edited)
+                    self.assertEqual(window.pipeline.analyze_image.call_count, 1)
+                    window.edit_button.click()
+                    wait_idle(self.app, window)
+                    output = root / ("exported" + extension)
+                    window.save_to(output)
+                    wait_idle(self.app, window)
+                    reader = window.document._read(output)
+                    actual = np.frombuffer(reader.layer_image(1, "image"), np.uint8).reshape(top.shape)
+                    from auto_mosaic.layers import effect_pixels
+                    local_mask = edited
+                    if extension == ".clip":
+                        local_mask = np.zeros_like(edited)
+                        local_mask[12:, :108] = edited[:84, 20:]
+                    np.testing.assert_array_equal(actual, effect_pixels(top, local_mask, SETTINGS))
+                    del reader
+                    self.assertFalse(warnings.called, warnings.call_args_list)
+                    window.close()
+                    self.app.processEvents()
+
+
+if __name__ == "__main__":
+    unittest.main()

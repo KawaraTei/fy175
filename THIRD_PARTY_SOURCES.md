@@ -1,5 +1,19 @@
 # Third-party sources for FY175AutoMosaic 1.1.0
 
+## Source-only layer support added after 1.1.0
+
+The unreleased layer workflow adds `psdparse==0.13.0` and `clipparse==0.2.0`.
+These packages are not included in the existing 1.1.0 assets described below.
+Both upstream projects use the MIT license; the notices are retained in `LICENSES`.
+
+- [psdparse source](https://github.com/wamsoft/psdparse), [0.13.0 distribution](https://pypi.org/project/psdparse/0.13.0/)
+- [clipparse source](https://github.com/wamsoft/clipparse), [0.2.0 distribution](https://pypi.org/project/clipparse/0.2.0/)
+
+Before a future binary release, inventory the native wheels' bundled zlib / SQLite
+and other build dependencies and retain their applicable notices as well.
+
+## Published 1.1.0
+
 The Windows `FY175AutoMosaic.zip` is the CPU build. It contains no NVIDIA CUDA
 or cuDNN runtime DLLs. The source application's AGPL-3.0-only license is unchanged.
 

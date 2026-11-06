@@ -62,7 +62,7 @@ from auto_mosaic.pipeline import MosaicPipeline
 from auto_mosaic.mask_selection import mask_iou
 from auto_mosaic.sidecar import save_sidecar, sidecar_path
 from auto_mosaic.ui_style import APP_STYLE, section_label
-from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
+from auto_mosaic.settings_ui import AdvancedSettingsSection, add_mask_smoothing
 
 
 APP_NAME = "FY175AutoMosaic"
@@ -446,11 +446,10 @@ class AutoMosaicWindow(QMainWindow):
         right_layout.setContentsMargins(14, 12, 14, 12)
         right_layout.setSpacing(7)
 
-        self.advanced_settings = AdvancedSettingsDialog(self, "画像")
-        self.advanced_settings.resize(360, 560)
+        self.advanced_settings = AdvancedSettingsSection()
         advanced = self.advanced_settings.settings_layout
-        self.advanced_button = self._button("詳細設定…", self.advanced_settings.show_settings)
-        right_layout.addWidget(self.advanced_button)
+        self.advanced_button = self.advanced_settings.toggle_button
+        right_layout.addWidget(self.advanced_settings)
         advanced.addWidget(self._section_label("画像の種類"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["実写", "イラスト"])
@@ -584,11 +583,10 @@ class AutoMosaicWindow(QMainWindow):
         )
         right_layout.addWidget(self.open_output_button)
 
-        advanced.addWidget(self._section_label("出力suffix"))
+        right_layout.addWidget(self._section_label("出力suffix"))
         self.suffix_edit = QLineEdit("_mosaic")
         self.suffix_edit.setPlaceholderText("空欄可")
-        advanced.addWidget(self.suffix_edit)
-        advanced.addStretch(1)
+        right_layout.addWidget(self.suffix_edit)
         right_layout.addStretch(1)
 
         settings_scroll = QScrollArea()

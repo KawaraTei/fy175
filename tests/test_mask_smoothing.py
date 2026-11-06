@@ -81,17 +81,16 @@ class SmoothingTests(unittest.TestCase):
             manual = pipeline.process_with_mask(source, jagged_mask(), config, [])
             np.testing.assert_array_equal(manual.mask, jagged_mask())
 
-    def test_dialogs_allow_main_window_input_and_reuse_controls(self):
+    def test_inline_settings_collapse_preserves_values_and_excludes_suffix(self):
         app = QApplication.instance() or QApplication([])
         for window in (AutoMosaicWindow(), VideoMosaicWindow()):
             try:
                 window.show()
-                QTest.mouseClick(window.advanced_button, Qt.MouseButton.LeftButton)
                 app.processEvents()
-                dialog = window.advanced_settings
-                self.assertTrue(dialog.isVisible())
+                section = window.advanced_settings
+                self.assertTrue(section.content.isVisible())
                 self.assertIsNone(app.activeModalWidget())
-                self.assertIs(window.threshold_slider.window(), dialog)
+                self.assertIs(window.threshold_slider.window(), window)
                 slider = getattr(window, "effect_size_slider", None)
                 if slider is None:
                     slider = window.effect_size
@@ -100,9 +99,15 @@ class SmoothingTests(unittest.TestCase):
                 self.assertEqual(slider.value(), value + 1)
                 window.threshold_slider.setValue(45)
                 window.mask_smoothing_spin.setValue(7)
-                dialog.close()
+                QTest.mouseClick(window.advanced_button, Qt.MouseButton.LeftButton)
+                app.processEvents()
+                self.assertFalse(section.content.isVisible())
+                if isinstance(window, AutoMosaicWindow):
+                    self.assertTrue(window.suffix_edit.isVisible())
+                    self.assertFalse(section.isAncestorOf(window.suffix_edit))
+                    self.assertGreater(window.suffix_edit.y(), window.output_edit.y())
                 window.advanced_button.click()
-                self.assertIs(window.advanced_settings, dialog)
+                self.assertTrue(section.content.isVisible())
                 self.assertEqual(window.threshold_slider.value(), 45)
                 config = window._settings()
                 config = getattr(config, "processing", config)

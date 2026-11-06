@@ -34,7 +34,6 @@ def test_mask_settings_reach_analysis_and_saving_and_lock_during_editing() -> No
     app = QApplication.instance() or QApplication([])
     window = AutoMosaicWindow()
     window.show()
-    window.advanced_button.click()
     app.processEvents()
     received = []
 

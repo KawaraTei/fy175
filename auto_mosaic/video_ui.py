@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from auto_mosaic.domain import EffectType, ImageMode, ProcessingSettings
 from auto_mosaic.image_ops import apply_effect, visualize_detection
 from auto_mosaic.ui_style import APP_STYLE, section_label
-from auto_mosaic.settings_ui import AdvancedSettingsDialog, add_mask_smoothing
+from auto_mosaic.settings_ui import AdvancedSettingsSection, add_mask_smoothing
 from auto_mosaic.video_analysis import VideoAnalysis, VideoAnalysisSettings, analyze_video, export_video
 from auto_mosaic.video_io import VIDEO_EXTENSIONS, VideoCancelled, decode_frames, probe_video
 from auto_mosaic.video_mask_editor import VideoMaskEditor
@@ -225,11 +225,10 @@ class VideoMosaicWindow(QMainWindow):
         settings = QVBoxLayout(panel)
         settings.setContentsMargins(14, 12, 14, 12)
         settings.setSpacing(7)
-        self.advanced_settings = AdvancedSettingsDialog(self, "動画")
+        self.advanced_settings = AdvancedSettingsSection()
         advanced = self.advanced_settings.settings_layout
-        self.advanced_button = QPushButton("詳細設定…")
-        self.advanced_button.clicked.connect(self.advanced_settings.show_settings)
-        settings.addWidget(self.advanced_button)
+        self.advanced_button = self.advanced_settings.toggle_button
+        settings.addWidget(self.advanced_settings)
         advanced.addWidget(section_label("画像の種類"))
         self.mode = QComboBox()
         self.mode.addItem("実写", ImageMode.PHOTO.value)
@@ -293,7 +292,6 @@ class VideoMosaicWindow(QMainWindow):
         self.interval_note.setWordWrap(True)
         self.interval_note.setObjectName("muted")
         advanced.addWidget(self.interval_note)
-        advanced.addStretch(1)
         self.analysis_controls = [self.mode, self.penis_check, self.vagina_check, self.threshold_slider,
                                   self.interval, self.mask_smoothing_spin]
         self.mask_smoothing_spin.valueChanged.connect(self._analysis_settings_changed)

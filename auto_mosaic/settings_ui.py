@@ -1,34 +1,33 @@
-"""Shared modeless settings window and automatic-mask smoothing control."""
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget
+"""Shared collapsible settings section and automatic-mask smoothing control."""
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from auto_mosaic.domain import PROCESSING_RANGES, ProcessingSettings
 
 
-class AdvancedSettingsDialog(QDialog):
-    def __init__(self, parent, context):
+class AdvancedSettingsSection(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"詳細設定 — {context}")
-        self.setWindowModality(Qt.WindowModality.NonModal)
-        self.resize(360, 500)
-        self.setMinimumSize(320, 340)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        content = QWidget()
-        self.settings_layout = QVBoxLayout(content)
-        self.settings_layout.setSpacing(10)
-        scroll.setWidget(content)
-        layout.addWidget(scroll, 1)
-        close = QPushButton("閉じる")
-        close.clicked.connect(self.close)
-        layout.addWidget(close)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.toggle_button = QPushButton()
+        self.toggle_button.setObjectName("advancedToggle")
+        self.toggle_button.setAccessibleName("詳細設定")
+        self.toggle_button.setCheckable(True)
+        layout.addWidget(self.toggle_button)
+        self.content = QWidget()
+        self.settings_layout = QVBoxLayout(self.content)
+        self.settings_layout.setContentsMargins(0, 10, 0, 10)
+        self.settings_layout.setSpacing(7)
+        layout.addWidget(self.content)
+        self.toggle_button.toggled.connect(self._set_expanded)
+        self.toggle_button.setChecked(True)
 
-    def show_settings(self):
-        self.show()
-        self.raise_()
-        self.activateWindow()
+    def _set_expanded(self, expanded):
+        self.content.setVisible(expanded)
+        self.toggle_button.setText(("▼" if expanded else "▶") + " 詳細設定")
+        self.toggle_button.setToolTip("詳細設定を折り畳む" if expanded else "詳細設定を展開する")
 
 
 def add_mask_smoothing(layout):

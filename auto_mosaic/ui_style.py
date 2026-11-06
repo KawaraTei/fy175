@@ -13,6 +13,8 @@ APP_STYLE = """
     QPushButton { background: #356b92; color: white; border: none; border-radius: 3px; padding: 7px 12px; }
     QPushButton:hover { background: #4f89b2; }
     QPushButton:disabled { background: #3a3d45; color: #858993; }
+    QPushButton#advancedToggle { text-align: left; background: #292e38; border: 1px solid #49515f; }
+    QPushButton#advancedToggle:hover { background: #3b4655; }
     QPushButton#previewMode { background: #292e38; border: 1px solid #49515f; padding: 6px; }
     QPushButton#previewMode:hover { background: #3b4655; }
     QPushButton#previewMode:checked { background: #356b92; border: 1px solid #75c5ff; font-weight: 600; }

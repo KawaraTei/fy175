@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from auto_mosaic.ui import AutoMosaicWindow
 from auto_mosaic.video_ui import VideoMosaicWindow
@@ -16,7 +16,7 @@ from tests.test_mask_smoothing import Detector, Segmenter
 
 def main():
     app = QApplication.instance() or QApplication([])
-    destination = Path(".codex-qa/2026-10-19/mask-settings").resolve()
+    destination = Path(".codex-qa/2026-11-07/inline-settings").resolve()
     destination.mkdir(parents=True, exist_ok=True)
     source = destination / "contour-fixture.png"
     yy, xx = np.indices((240, 320))
@@ -46,42 +46,45 @@ def main():
         wait()
         window.set_preview_mode("マスク範囲")
         pump()
-        window.grab().save(str(destination / "image-smoothing-0.png"))
-        window.mask_smoothing_spin.setValue(10)
-        QTest.mouseClick(window.analyze_button, Qt.MouseButton.LeftButton)
-        wait()
-        window.set_preview_mode("マスク範囲")
-        pump()
-        window.grab().save(str(destination / "image-smoothing-10.png"))
+        window.grab().save(str(destination / "image-expanded.png"))
         QTest.mouseClick(window.advanced_button, Qt.MouseButton.LeftButton)
-        window.advanced_settings.move(1300, 100)
         pump()
+        assert not window.advanced_settings.content.isVisible()
+        assert window.suffix_edit.isVisible()
         assert app.activeModalWidget() is None
         QTest.mouseClick(window.preview_mode_buttons["処理結果"], Qt.MouseButton.LeftButton)
         assert window.preview_mode() == "処理結果"
         window.set_preview_mode("マスク範囲")
         pump()
-        window.advanced_settings.grab().save(str(destination / "image-advanced.png"))
-        # Capture the displayed windows together when a native screen is present.
-        if app.platformName() == "windows":
-            app.primaryScreen().grabWindow(0).save(str(destination / "native-desktop.png"))
+        window.grab().save(str(destination / "image-collapsed.png"))
         window.resize(980, 650)
         pump()
-        window.grab().save(str(destination / "image-minimum.png"))
-        window.advanced_settings.resize(320, 340)
+        window.grab().save(str(destination / "image-collapsed-minimum.png"))
+        scroll = window.suffix_edit.parentWidget()
+        while not isinstance(scroll, QScrollArea):
+            scroll = scroll.parentWidget()
+        scroll.ensureWidgetVisible(window.suffix_edit)
         pump()
-        window.advanced_settings.grab().save(str(destination / "advanced-minimum.png"))
+        window.grab().save(str(destination / "image-suffix-minimum.png"))
+        scroll.verticalScrollBar().setValue(0)
+        window.advanced_button.click()
+        pump()
+        window.grab().save(str(destination / "image-expanded-minimum.png"))
         window.close()
 
     video = VideoMosaicWindow()
     video.show()
+    pump()
+    video.grab().save(str(destination / "video-expanded.png"))
     video.advanced_button.click()
     pump()
-    video.grab().save(str(destination / "video-main.png"))
-    video.advanced_settings.grab().save(str(destination / "video-advanced.png"))
+    video.grab().save(str(destination / "video-collapsed.png"))
     video.resize(1060, 760)
     pump()
-    video.grab().save(str(destination / "video-minimum.png"))
+    video.grab().save(str(destination / "video-collapsed-minimum.png"))
+    video.advanced_button.click()
+    pump()
+    video.grab().save(str(destination / "video-expanded-minimum.png"))
     video.close()
     print(f"QA_PLATFORM={app.platformName()} CAPTURES={destination}")
 

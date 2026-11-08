@@ -56,9 +56,11 @@ def main():
                "--add-data", f"{ROOT / 'models'}:models",
                "--add-data", f"{ROOT / 'assets' / 'app.ico'}:assets",
                "--add-data", f"{ROOT / 'LICENSES'}:LICENSES",
+               "--add-data", f"{ROOT / 'docs'}:docs/docs",
                "--add-data", f"{staging}:LICENSES/macos-python"]
     for filename in ("README.md", "MACOS.md", "LICENSE", "NOTICE", "MODEL_LICENSES.md",
-                     "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_SOURCES.md", "AGENT_INTERFACE.md"):
+                     "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_SOURCES.md", "AGENT_INTERFACE.md", "DISTRIBUTION.md",
+                     *(path.name for path in ROOT.glob("RELEASE_NOTES_*.md"))):
         command += ["--add-data", f"{ROOT / filename}:docs"]
     command.append(str(ROOT / "auto_mosaic" / "app.py"))
     subprocess.run(command, cwd=ROOT, check=True)

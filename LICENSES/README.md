@@ -15,6 +15,10 @@ builds. Do not remove them from a binary distribution.
 | `OpenCV-4.12.0.txt` | OpenCV |
 | `OpenCV-ThirdParty-4.12.0.txt` | Third-party code bundled with OpenCV |
 | `Pillow-11.3.0.txt` | Pillow and its bundled notices |
+| `psdparse-0.13.0.txt`, `clipparse-0.2.0.txt` | PSD/CLIP library MIT notices |
+| `zlib-1.3.1.txt` | zlib statically included in the Windows layer libraries |
+| `SQLite-3.45.1.txt` | SQLite public-domain notice from the clipparse dependency |
+| `pybind11.txt` | BSD notice for compiled Python layer bindings |
 | `PyInstaller-6.15.0.txt` | PyInstaller, including its bootloader exception |
 | `Python-3.13.txt` | Python 3.13 |
 | `SAMExporter-MIT.txt` | SAM Exporter reference implementation |

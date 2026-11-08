@@ -3,14 +3,19 @@
 This checklist covers repository publication and optional Windows binary
 releases. It is operational guidance, not legal advice.
 
-## Release 1.1.0
+## Release 1.1.1
 
 The public Windows ZIP is the CPU build; NVIDIA CUDA/cuDNN libraries are not
 redistributed. GPU source builds remain available. `THIRD_PARTY_SOURCES.md`
 records the exact FFmpeg source/build revisions and the companion source asset,
-including the Qt/PySide sources and third-party notices. The existing 1.1.0 tag
+including the Qt/PySide sources and third-party notices. The existing 1.1.1 tag
 identifies the unchanged application code; later release-documentation and
 verification-script commits are listed separately in the release notes.
+
+The PSD/CLIP wheels and their zlib, SQLite and pybind11 notices are included.
+The companion source archive retains the matching 1.1.0 FFmpeg/Qt materials and
+adds a separate layer-source inventory. macOS remains a source/local-build option;
+this release does not publish a signed or notarized Mac application.
 
 ## Before publishing the repository
 

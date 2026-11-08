@@ -1,27 +1,36 @@
-# Third-party sources for FY175AutoMosaic 1.1.0
+# Third-party sources for FY175AutoMosaic 1.1.1
 
-## Source-only layer support added after 1.1.0
+## Layer support in 1.1.1
 
-The unreleased layer workflow adds `psdparse==0.13.0` and `clipparse==0.2.0`.
-These packages are not included in the existing 1.1.0 assets described below.
+The Windows release includes `psdparse==0.13.0` and `clipparse==0.2.0`.
 Both upstream projects use the MIT license; the notices are retained in `LICENSES`.
 
 - [psdparse source](https://github.com/wamsoft/psdparse), [0.13.0 distribution](https://pypi.org/project/psdparse/0.13.0/)
 - [clipparse source](https://github.com/wamsoft/clipparse), [0.2.0 distribution](https://pypi.org/project/clipparse/0.2.0/)
 
-Before a future binary release, inventory the native wheels' bundled zlib / SQLite
-and other build dependencies and retain their applicable notices as well.
+The Windows CPython 3.13 wheels statically include zlib 1.3.1; clipparse also
+includes SQLite 3.45.1. This was checked against their source build recipes,
+binary version strings and PE imports. Their notices and the pybind11 BSD notice
+are retained as `LICENSES/zlib-1.3.1.txt`, `LICENSES/SQLite-3.45.1.txt`, and
+`LICENSES/pybind11.txt`. The wheel build's exact pybind11 version is not recorded;
+the notice reference is upstream v3.0.1, not a claim of an exact rebuild.
+The companion source ZIP adds these packages' source archives, zlib and SQLite
+sources, the pybind11 notice, and a separate `layers/SOURCE_MANIFEST.json`.
 
-## Published 1.1.0
+## Windows CPU distribution
 
 The Windows `FY175AutoMosaic.zip` is the CPU build. It contains no NVIDIA CUDA
 or cuDNN runtime DLLs. The source application's AGPL-3.0-only license is unchanged.
 
-The companion [ThirdPartySources.zip](https://github.com/KawaraTei/fy175/releases/download/1.1.0/ThirdPartySources.zip)
+The companion [ThirdPartySources.zip](https://github.com/KawaraTei/fy175/releases/download/1.1.1/ThirdPartySources.zip)
 provides the source archives, fixed build recipes, source inventory and SHA-256
 hashes for the bundled FFmpeg tools and Qt/PySide libraries. It is not required
 to run the application. Original notices are also in `LICENSES/third-party/`
 inside the Windows ZIP.
+
+The FFmpeg and Qt/PySide versions are unchanged from 1.1.0. Their source materials
+and original notices are reused from that release, with binary hashes checked
+against the new package. The added layer materials have their own inventory.
 
 ## FFmpeg / ffprobe
 

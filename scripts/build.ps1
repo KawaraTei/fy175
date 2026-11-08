@@ -50,6 +50,9 @@ finally {
 }
 
 Copy-Item -LiteralPath 'README.md' -Destination 'dist\FY175AutoMosaic\README.md' -Force
+Copy-Item -LiteralPath 'docs' -Destination 'dist\FY175AutoMosaic\docs' -Recurse -Force
+Copy-Item -LiteralPath 'MACOS.md' -Destination 'dist\FY175AutoMosaic\MACOS.md' -Force
+Get-ChildItem -File 'RELEASE_NOTES_*.md' | Copy-Item -Destination 'dist\FY175AutoMosaic' -Force
 Copy-Item -LiteralPath 'AGENT_INTERFACE.md' -Destination 'dist\FY175AutoMosaic\AGENT_INTERFACE.md' -Force
 Copy-Item -LiteralPath 'LICENSE' -Destination 'dist\FY175AutoMosaic\LICENSE' -Force
 Copy-Item -LiteralPath 'NOTICE' -Destination 'dist\FY175AutoMosaic\NOTICE' -Force

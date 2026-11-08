@@ -18,6 +18,9 @@ their own licenses; the application license does not replace them.
 | Pillow | 11.3.0 | HPND and bundled component licenses | `LICENSES/Pillow-11.3.0.txt` |
 | psdparse | 0.13.0 | MIT | `LICENSES/psdparse-0.13.0.txt` |
 | clipparse | 0.2.0 | MIT | `LICENSES/clipparse-0.2.0.txt` |
+| zlib (inside psdparse / clipparse Windows wheels) | 1.3.1 | zlib | `LICENSES/zlib-1.3.1.txt` |
+| SQLite (inside clipparse Windows wheel) | 3.45.1 | Public domain | `LICENSES/SQLite-3.45.1.txt` |
+| pybind11 (compiled layer bindings) | Wheel build version not recorded | BSD-3-Clause | `LICENSES/pybind11.txt` |
 | PySide6 Essentials | 6.11.1 | LGPL-3.0-only (the open-source option selected here) | `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` |
 | shiboken6 | 6.11.1 | LGPL-3.0-only (the open-source option selected here) | `LICENSES/LGPL-3.0.txt`, `LICENSES/GPL-3.0.txt` |
 | PyInstaller | 6.15.0 | GPL-2.0-or-later with the PyInstaller bootloader exception | `LICENSES/PyInstaller-6.15.0.txt` |
@@ -47,7 +50,7 @@ AGPL license. Review their distribution terms and compatibility with the
 application license before publishing a GPU binary; the local build is not a
 completed redistribution review.
 
-The public 1.1.0 Windows ZIP uses the CPU edition of ONNX Runtime. It does not
+The public 1.1.1 Windows ZIP uses the CPU edition of ONNX Runtime. It does not
 include NVIDIA CUDA or cuDNN runtime DLLs. GPU setup remains available for local
 source builds; the application license is unchanged.
 
